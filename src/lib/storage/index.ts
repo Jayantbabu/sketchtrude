@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export type StorageBucket =
   | "layer-rasters"
@@ -20,7 +21,7 @@ export async function uploadToStorage(
   file: Blob | Buffer,
   contentType: string
 ): Promise<string | null> {
-  const supabase = await createClient();
+  const supabase = createAdminClient() ?? (await createClient());
   const { data, error } = await supabase.storage
     .from(bucket)
     .upload(path, file, { upsert: true, contentType });
@@ -38,7 +39,7 @@ export async function getSignedUrl(
   path: string,
   expiresIn = 3600
 ): Promise<string | null> {
-  const supabase = await createClient();
+  const supabase = createAdminClient() ?? (await createClient());
   const { data, error } = await supabase.storage
     .from(bucket)
     .createSignedUrl(path, expiresIn);
@@ -55,6 +56,6 @@ export async function deleteFromStorage(
   bucket: StorageBucket,
   paths: string[]
 ): Promise<void> {
-  const supabase = await createClient();
+  const supabase = createAdminClient() ?? (await createClient());
   await supabase.storage.from(bucket).remove(paths);
 }

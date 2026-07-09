@@ -1936,6 +1936,7 @@ function endPointer(e) {
     _thumbTimer = setTimeout(() => renderLayers(), 400);
     l._dirty = true;
     scheduleAutosave();
+    saveDoc();
   }
 }
 let _thumbTimer = null;
@@ -9329,7 +9330,7 @@ const AUTOSAVE_DB = 'nm-trace', AUTOSAVE_STORE = 'doc';
 function autosaveKey() {
   return (typeof window !== 'undefined' && window.__SKETCHTRUDE_PROJECT_ID) || 'current';
 }
-let _autosaveTimer = null, _autosaveBusy = false, _autosaveSuspended = false;
+let _autosaveTimer = null, _autosaveBusy = false, _autosaveSuspended = false, _autosaveSerial = 0;
 let _autosaveWaiters = [];
 let _idbPromise = null;
 
@@ -9367,6 +9368,7 @@ function scheduleMassAutosave() {
 
 function scheduleAutosave() {
   if (_autosaveSuspended) return;
+  _autosaveSerial++;
   clearTimeout(_autosaveTimer);
   scheduleThumbnail();
   // Long idle debounce: during active sketching (changes every few seconds) this
@@ -9377,7 +9379,7 @@ function scheduleAutosave() {
     if (state.drawing) { scheduleAutosave(); return; }
     if (window.requestIdleCallback) requestIdleCallback(() => saveDoc(), { timeout: 4000 });
     else saveDoc();
-  }, 3000);
+  }, 750);
 }
 
 // Periodic safety net for long pause-free sessions — only runs when idle and
@@ -9405,6 +9407,7 @@ async function saveDoc() {
   if (_autosaveSuspended || !state.layers.length) return;
   if (state.drawing) { scheduleAutosave(); return; }   // defer until not drawing
   _autosaveBusy = true;
+  const saveSerial = _autosaveSerial;
   try {
     // Only re-encode layers that actually changed since the last save.
     const layerData = [];
@@ -9422,7 +9425,7 @@ async function saveDoc() {
           sourceCanvas = tmp;
         }
         l._savedBlob = await new Promise(res => sourceCanvas.toBlob(res, 'image/png'));
-        l._dirty = false;
+        if (_autosaveSerial === saveSerial) l._dirty = false;
         await Promise.resolve();   // yield between layers
       }
       layerData.push({
@@ -9464,6 +9467,7 @@ async function saveDoc() {
   } finally {
     _autosaveBusy = false;
     notifyAutosaveWaiters();
+    if (_autosaveSerial !== saveSerial && !state.drawing) scheduleAutosave();
   }
 }
 
