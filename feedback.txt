@@ -1,0 +1,26 @@
+V .95Acer Nitro 5 laptop(Brave Browser) + iPad Air M4
+Straight diagonal lines not possible.
+Vanishing points in 2 point guide lines is fixed.
+Only z-axis extrusion possible, so when using the 3D spaces push to create mass out of drawing the push command doesn&apos;t allow for a through cut.
+Visual glitch in the color wheel where the color box is not centered.
+Shape is not part of any layer and can’t erase a part of it.
+The shape once placed can’t be moved or resized.
+Stencil is fixed after placing can’t reshape or resize.
+Stencils only allow for limited number of undo and redo. If 10 stencils are placed undo is limited to 6 and when i try to redo so i get all 6 back only 5 comeback.
+“Ortho Snap” staying on top of layers tab cover the add image and add new layer button
+In draw mode for PC users if using a graphic tablet there is no zoom option i have to either use track pad or press ctrl+scroll wheel to zoom.
+When filling colors it doesn’t follow the line and the color spills onto the line.
+When i open guide box i have to go back to the guide box selection and click again to close the guide box.
+No options to replicate straight lines for PC users
+Wall is not part of any layer 
+No snapping option for walls to connect to each other
+When layers are deleted there is no prompt asking if we are sure and deletes directly without an undo option
+No symmetry tools are there 
+In iPad there is no option to draw straight lines 
+Stab doesn&apos;t function properly when using wall function in iPad
+When the bar tool bar is moved to the top the color wheel doesn’t recognize the change in position and still opens towards the top hiding it underneath
+When stab is at 0 there is an offset to where the drawing happens. 
+If i use the lasso tool to select a drawing to move it there is no move option and if i press the cut command ctrl+v doesn’t paste the product.
+The “x” on measurement doesn’t work, if i need to close it i have to choose the selection tool and then click on the points and then delete it
+
+

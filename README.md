@@ -1,36 +1,29 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SketchTrude
 
-## Getting Started
+Next.js web application and PWA for architectural sketching — migrated from the HTML PWA with Supabase auth, Postgres metadata, and cloud storage.
 
-First, run the development server:
+## Setup
+
+1. Copy `.env.local.example` to `.env.local` and fill in Supabase credentials.
+2. Run SQL migrations in `supabase/migrations/` via the Supabase SQL editor.
+3. Create storage buckets (or run `002_storage_buckets.sql`).
+4. Enable email/password auth in Supabase dashboard.
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Deploy
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Deploy to Vercel with the same environment variables. Set `NEXT_PUBLIC_APP_URL` to your production URL.
 
-## Learn More
+## Project structure
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `src/app/` — Next.js routes (landing, auth, dashboard, studio)
+- `src/components/` — React UI components
+- `src/engine/` — Canvas engine (modularized from legacy PWA)
+- `public/engine/` — Legacy engine runtime bundle
+- `supabase/migrations/` — Database schema and storage policies
