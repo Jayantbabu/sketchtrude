@@ -22,8 +22,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_height_mm: 297,
     doc_dpi: 150,
     scale_label: "1:50",
+    auto_expand: true,
     preview: "#ffffff",
-    metadata: { template: "blank", paper_bg: "#ffffff" },
+    metadata: { template: "blank", paper_bg: "#ffffff", auto_expand: true },
   },
   {
     id: "infinite",
@@ -38,7 +39,7 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     preview: "#ffffff",
     previewStyle:
       "repeating-linear-gradient(45deg,#f5f5f5 0,#f5f5f5 2px,#ffffff 2px,#ffffff 8px)",
-    metadata: { template: "infinite", infinite_canvas: true, paper_bg: "#ffffff" },
+    metadata: { template: "infinite", infinite_canvas: true, paper_bg: "#ffffff", auto_expand: true },
   },
   {
     id: "blueprint",
@@ -48,10 +49,12 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_height_mm: 297,
     doc_dpi: 150,
     scale_label: "1:50",
+    auto_expand: true,
     preview: "#1e3a5f",
     metadata: {
       template: "blueprint",
       paper_bg: "#1e3a5f",
+      auto_expand: true,
       show_grid: true,
       grid_type: "square",
       grid_spacing_mm: 5,
@@ -66,10 +69,12 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_height_mm: 297,
     doc_dpi: 150,
     scale_label: "1:50",
+    auto_expand: true,
     preview: "#2a2a2e",
     metadata: {
       template: "charcoal-blueprint",
       paper_bg: "#2a2a2e",
+      auto_expand: true,
       show_grid: true,
       grid_type: "square",
       grid_spacing_mm: 5,
@@ -84,8 +89,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_height_mm: 297,
     doc_dpi: 150,
     scale_label: "1:50",
+    auto_expand: true,
     preview: "#c4a574",
-    metadata: { template: "kraft", paper_bg: "#c4a574" },
+    metadata: { template: "kraft", paper_bg: "#c4a574", auto_expand: true },
   },
   {
     id: "trace-yellow",
@@ -95,8 +101,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_height_mm: 297,
     doc_dpi: 150,
     scale_label: "1:50",
+    auto_expand: true,
     preview: "#fff8e1",
-    metadata: { template: "trace-yellow", paper_bg: "#fff8e1", trace_tint: 0.35 },
+    metadata: { template: "trace-yellow", paper_bg: "#fff8e1", trace_tint: 0.35, auto_expand: true },
   },
   {
     id: "basic-grid",
@@ -208,8 +215,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_height_mm: 297,
     doc_dpi: 150,
     scale_label: "1:50",
+    auto_expand: true,
     preview: "#ffffff",
-    metadata: { template: "a4-portrait", paper_bg: "#ffffff" },
+    metadata: { template: "a4-portrait", paper_bg: "#ffffff", auto_expand: true },
   },
   {
     id: "a3-landscape",
@@ -219,8 +227,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_height_mm: 297,
     doc_dpi: 150,
     scale_label: "1:50",
+    auto_expand: true,
     preview: "#ffffff",
-    metadata: { template: "a3-landscape", paper_bg: "#ffffff" },
+    metadata: { template: "a3-landscape", paper_bg: "#ffffff", auto_expand: true },
   },
 ];
 

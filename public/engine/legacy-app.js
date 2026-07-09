@@ -402,7 +402,7 @@ function expandDocumentPixels(addLeft, addTop, addRight, addBottom) {
   DOC_W_PX = newW;
   DOC_H_PX = newH;
   // Keep mm-per-pixel constant so scale/measurements stay accurate after expansion
-  if (state.infiniteCanvas && oldW > 0 && oldH > 0) {
+  if ((state.infiniteCanvas || state.autoExpandCanvas) && oldW > 0 && oldH > 0) {
     const mmPerPxW = DOC_W_MM / oldW;
     const mmPerPxH = DOC_H_MM / oldH;
     DOC_W_MM = newW * mmPerPxW;
@@ -1934,6 +1934,8 @@ function endPointer(e) {
     // Thumbnail refresh — debounced, off the interactive path.
     clearTimeout(_thumbTimer);
     _thumbTimer = setTimeout(() => renderLayers(), 400);
+    l._dirty = true;
+    scheduleAutosave();
   }
 }
 let _thumbTimer = null;
@@ -3725,7 +3727,7 @@ async function saveThumbnailLocal(blob) {
   if (!db) return;
   await new Promise((resolve, reject) => {
     const tx = db.transaction(AUTOSAVE_STORE, 'readwrite');
-    tx.objectStore(AUTOSAVE_STORE).put({ blob, savedAt: Date.now() }, 'thumb-' + AUTOSAVE_KEY);
+    tx.objectStore(AUTOSAVE_STORE).put({ blob, savedAt: Date.now() }, 'thumb-' + autosaveKey());
     tx.oncomplete = resolve;
     tx.onerror = () => reject(tx.error);
   });
@@ -9324,7 +9326,9 @@ document.getElementById('canvas-area').addEventListener('pointerdown', () => {
    layer plus document metadata; restores on next launch.
    ================================================================= */
 const AUTOSAVE_DB = 'nm-trace', AUTOSAVE_STORE = 'doc';
-const AUTOSAVE_KEY = (typeof window !== 'undefined' && window.__SKETCHTRUDE_PROJECT_ID) || 'current';
+function autosaveKey() {
+  return (typeof window !== 'undefined' && window.__SKETCHTRUDE_PROJECT_ID) || 'current';
+}
 let _autosaveTimer = null, _autosaveBusy = false, _autosaveSuspended = false;
 let _idbPromise = null;
 
@@ -9363,7 +9367,7 @@ function scheduleAutosave() {
     if (state.drawing) { scheduleAutosave(); return; }
     if (window.requestIdleCallback) requestIdleCallback(() => saveDoc(), { timeout: 4000 });
     else saveDoc();
-  }, 10000);
+  }, 3000);
 }
 
 // Periodic safety net for long pause-free sessions — only runs when idle and
@@ -9410,12 +9414,17 @@ async function saveDoc() {
         l._dirty = false;
         await Promise.resolve();   // yield between layers
       }
-      layerData.push({ name: l.name, visible: l.visible, opacity: l.opacity, trace: l.trace, blendMode: l.blendMode, blob: l._savedBlob });
+      layerData.push({
+        name: l.name, visible: l.visible, opacity: l.opacity,
+        trace: l.trace, blendMode: l.blendMode,
+        blob: l._savedBlob, raster_path: l._rasterPath || null,
+      });
     }
     const payload = {
       version: 1, savedAt: Date.now(),
       doc: { wmm: DOC_W_MM, hmm: DOC_H_MM, dpi: DOC_DPI },
       infiniteCanvas: state.infiniteCanvas,
+      autoExpandCanvas: state.autoExpandCanvas,
       paperBg: state.paperBg,
       grid: { show: state.showGrid, type: state.gridType, spacingMM: state.gridSpacingMM },
       activeLayer: state.activeLayer,
@@ -9433,7 +9442,7 @@ async function saveDoc() {
     if (db) {
       await new Promise((resolve, reject) => {
         const tx = db.transaction(AUTOSAVE_STORE, 'readwrite');
-        tx.objectStore(AUTOSAVE_STORE).put(payload, AUTOSAVE_KEY);
+        tx.objectStore(AUTOSAVE_STORE).put(payload, autosaveKey());
         tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
       });
     }
@@ -9453,7 +9462,25 @@ let _cloudSyncInFlight = false;
 function scheduleCloudSync() {
   if (!_lastDocPayload) return;
   clearTimeout(_cloudSyncTimer);
-  _cloudSyncTimer = setTimeout(() => { flushCloudSync(); }, 8000);
+  _cloudSyncTimer = setTimeout(() => { flushCloudSync(); }, 2500);
+}
+
+async function uploadLayerRaster(pid, index, blob) {
+  const fd = new FormData();
+  fd.append('layer_index', String(index));
+  fd.append('raster', blob, 'layer-' + index + '.png');
+  const res = await fetch('/api/projects/' + pid + '/document/layer', {
+    method: 'POST',
+    body: fd,
+    credentials: 'same-origin',
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.warn('Layer upload failed:', index, res.status, errText);
+    return null;
+  }
+  const data = await res.json();
+  return data.raster_path || null;
 }
 
 async function flushCloudSync() {
@@ -9462,29 +9489,58 @@ async function flushCloudSync() {
   _cloudSyncInFlight = true;
   try {
     const payload = _lastDocPayload;
-    const fd = new FormData();
-    const layerMeta = payload.layers.map((l) => ({
-      name: l.name,
-      visible: l.visible,
-      opacity: l.opacity,
-      trace: l.trace,
-      blendMode: l.blendMode,
-      raster_path: l.raster_path || null,
-    }));
-    const manifest = Object.assign({}, payload, {
+    const layerMeta = [];
+    for (let i = 0; i < payload.layers.length; i++) {
+      const l = payload.layers[i];
+      let raster_path = l.raster_path || null;
+      if (l.blob && l.blob.size > 0) {
+        const uploaded = await uploadLayerRaster(pid, i, l.blob);
+        if (uploaded) {
+          raster_path = uploaded;
+          const live = state.layers[i];
+          if (live) live._rasterPath = uploaded;
+        }
+      }
+      layerMeta.push({
+        name: l.name,
+        visible: l.visible,
+        opacity: l.opacity,
+        trace: l.trace,
+        blendMode: l.blendMode,
+        raster_path,
+      });
+    }
+    const manifest = {
+      version: payload.version,
+      savedAt: payload.savedAt,
+      doc: payload.doc,
+      infiniteCanvas: payload.infiniteCanvas,
+      autoExpandCanvas: payload.autoExpandCanvas,
+      paperBg: payload.paperBg,
+      grid: payload.grid,
+      activeLayer: payload.activeLayer,
+      pxPerUnit: payload.pxPerUnit,
+      scaleUnit: payload.scaleUnit,
+      scaleLabel: payload.scaleLabel,
+      measurements: payload.measurements,
+      walls: payload.walls,
+      wallsVisible: payload.wallsVisible,
+      shapes: payload.shapes,
+      masses: payload.masses,
+      massBaseAnchor: payload.massBaseAnchor,
       layers: layerMeta,
-      layer_count: payload.layers.length,
-    });
-    fd.append('manifest', JSON.stringify(manifest));
-    payload.layers.forEach((l, i) => {
-      if (l.blob) fd.append('layer_' + i, l.blob, 'layer-' + i + '.png');
-    });
+      layer_count: layerMeta.length,
+    };
     const res = await fetch('/api/projects/' + pid + '/document', {
       method: 'PUT',
-      body: fd,
+      headers: { 'Content-Type': 'application/json' },
       credentials: 'same-origin',
+      body: JSON.stringify(manifest),
     });
-    if (!res.ok) console.warn('Cloud save failed:', res.status);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      console.warn('Cloud save failed:', res.status, errText);
+    }
   } catch (e) {
     console.warn('Cloud save failed:', e);
   } finally {
@@ -9530,7 +9586,7 @@ async function loadSavedDoc() {
   if (!db) return null;
   return new Promise((resolve) => {
     const tx = db.transaction(AUTOSAVE_STORE, 'readonly');
-    const req = tx.objectStore(AUTOSAVE_STORE).get(AUTOSAVE_KEY);
+    const req = tx.objectStore(AUTOSAVE_STORE).get(autosaveKey());
     req.onsuccess = () => resolve(req.result || null);
     req.onerror = () => resolve(null);
   });
@@ -9540,7 +9596,7 @@ async function clearSavedDoc() {
   const db = await idb();
   if (!db) return;
   const tx = db.transaction(AUTOSAVE_STORE, 'readwrite');
-  tx.objectStore(AUTOSAVE_STORE).delete(AUTOSAVE_KEY);
+  tx.objectStore(AUTOSAVE_STORE).delete(autosaveKey());
 }
 
 function removeAllLayers() {
@@ -9590,6 +9646,7 @@ async function restoreSession() {
     else if (saved.scaleLabel) applyScaleFromLabel(saved.scaleLabel);
     updateScaleDisplay();
     if (saved.infiniteCanvas != null) state.infiniteCanvas = !!saved.infiniteCanvas;
+    if (saved.autoExpandCanvas != null) state.autoExpandCanvas = !!saved.autoExpandCanvas;
     if (saved.paperBg) { state.paperBg = saved.paperBg; if (paper) paper.style.background = saved.paperBg; }
     if (saved.grid) {
       state.showGrid = !!saved.grid.show;
@@ -9726,11 +9783,18 @@ function applyProjectConfig() {
   }
   if (meta.infinite_canvas || cfg.infinite_canvas) state.infiniteCanvas = true;
   state.autoExpandCanvas = !!(
-    meta.infinite_canvas ||
     meta.auto_expand ||
-    meta.show_grid ||
+    meta.infinite_canvas ||
     cfg.infinite_canvas
   );
+  // Older projects created before auto_expand metadata — expand by default
+  if (
+    meta.auto_expand === undefined &&
+    meta.infinite_canvas === undefined &&
+    !cfg.infinite_canvas
+  ) {
+    state.autoExpandCanvas = true;
+  }
   const bg = meta.paper_bg;
   if (bg) {
     state.paperBg = bg;

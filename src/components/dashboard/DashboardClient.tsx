@@ -30,6 +30,7 @@ export function DashboardClient({ initialProjects }: { initialProjects: Project[
         metadata: {
           ...template.metadata,
           infinite_canvas: !!template.infinite_canvas,
+          auto_expand: !!(template.auto_expand || template.infinite_canvas),
         },
       }),
     });

@@ -15,15 +15,21 @@ declare const self: WorkerGlobalScope & {
 const runtimeCaching = [
   {
     matcher: ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>
-      sameOrigin && /\/api\/projects\/[^/]+\/document/.test(url.pathname),
+      sameOrigin && /\/api\/projects/.test(url.pathname),
     handler: new NetworkOnly(),
     method: "GET" as const,
   },
   {
     matcher: ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>
-      sameOrigin && url.pathname.startsWith("/api/projects"),
+      sameOrigin && /\/api\/projects/.test(url.pathname),
     handler: new NetworkOnly(),
-    method: "GET" as const,
+    method: "POST" as const,
+  },
+  {
+    matcher: ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>
+      sameOrigin && /\/api\/projects/.test(url.pathname),
+    handler: new NetworkOnly(),
+    method: "PUT" as const,
   },
   {
     matcher: ({ url, sameOrigin }: { url: URL; sameOrigin: boolean }) =>

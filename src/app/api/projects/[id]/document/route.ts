@@ -9,10 +9,74 @@ import { uploadToStorage } from "@/lib/storage";
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+export const maxDuration = 60;
+
 function readStudioDocument(metadata: Record<string, unknown> | null | undefined) {
   const doc = metadata?.studio_document;
   if (!doc || typeof doc !== "object") return null;
   return doc as StudioDocument;
+}
+
+function buildStudioDocument(
+  manifest: StudioDocument & { layer_count?: number },
+  savedLayers: StudioDocument["layers"],
+): StudioDocument {
+  return {
+    version: manifest.version ?? 1,
+    savedAt: manifest.savedAt ?? Date.now(),
+    doc: manifest.doc,
+    infiniteCanvas: manifest.infiniteCanvas,
+    autoExpandCanvas: manifest.autoExpandCanvas,
+    paperBg: manifest.paperBg,
+    grid: manifest.grid,
+    activeLayer: manifest.activeLayer,
+    pxPerUnit: manifest.pxPerUnit,
+    scaleUnit: manifest.scaleUnit,
+    scaleLabel: manifest.scaleLabel,
+    measurements: manifest.measurements,
+    walls: manifest.walls,
+    wallsVisible: manifest.wallsVisible,
+    shapes: manifest.shapes,
+    masses: manifest.masses,
+    massBaseAnchor: manifest.massBaseAnchor,
+    layers: savedLayers,
+  };
+}
+
+async function parseManifest(request: Request): Promise<{
+  manifest: StudioDocument & { layer_count?: number };
+  files: Map<number, Blob>;
+} | null> {
+  const contentType = request.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    const body = await request.json().catch(() => null);
+    if (!body || typeof body !== "object") return null;
+    return {
+      manifest: body as StudioDocument & { layer_count?: number },
+      files: new Map(),
+    };
+  }
+
+  const formData = await request.formData();
+  const manifestRaw = formData.get("manifest");
+  if (typeof manifestRaw !== "string") return null;
+
+  let manifest: StudioDocument & { layer_count?: number };
+  try {
+    manifest = JSON.parse(manifestRaw) as StudioDocument & { layer_count?: number };
+  } catch {
+    return null;
+  }
+
+  const files = new Map<number, Blob>();
+  const layerCount = manifest.layer_count ?? manifest.layers?.length ?? 0;
+  for (let i = 0; i < layerCount; i++) {
+    const file = formData.get(`layer_${i}`);
+    if (file instanceof Blob && file.size > 0) files.set(i, file);
+  }
+
+  return { manifest, files };
 }
 
 export async function GET(_request: Request, context: RouteContext) {
@@ -69,28 +133,21 @@ export async function PUT(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const formData = await request.formData();
-  const manifestRaw = formData.get("manifest");
-  if (typeof manifestRaw !== "string") {
-    return NextResponse.json({ error: "Missing manifest" }, { status: 400 });
+  const parsed = await parseManifest(request);
+  if (!parsed) {
+    return NextResponse.json({ error: "Missing or invalid manifest" }, { status: 400 });
   }
 
-  let manifest: StudioDocument & { layer_count?: number };
-  try {
-    manifest = JSON.parse(manifestRaw) as StudioDocument & { layer_count?: number };
-  } catch {
-    return NextResponse.json({ error: "Invalid manifest JSON" }, { status: 400 });
-  }
-
+  const { manifest, files } = parsed;
   const layerCount = manifest.layer_count ?? manifest.layers?.length ?? 0;
   const savedLayers = [];
 
   for (let i = 0; i < layerCount; i++) {
     const meta = manifest.layers?.[i];
-    const file = formData.get(`layer_${i}`);
     let raster_path = meta?.raster_path ?? null;
+    const file = files.get(i);
 
-    if (file instanceof Blob && file.size > 0) {
+    if (file) {
       raster_path = layerRasterPath(user.id, projectId, i);
       const buffer = Buffer.from(await file.arrayBuffer());
       const uploaded = await uploadToStorage(
@@ -114,25 +171,7 @@ export async function PUT(request: Request, context: RouteContext) {
     });
   }
 
-  const studio_document: StudioDocument = {
-    version: manifest.version ?? 1,
-    savedAt: manifest.savedAt ?? Date.now(),
-    doc: manifest.doc,
-    infiniteCanvas: manifest.infiniteCanvas,
-    paperBg: manifest.paperBg,
-    grid: manifest.grid,
-    activeLayer: manifest.activeLayer,
-    pxPerUnit: manifest.pxPerUnit,
-    scaleUnit: manifest.scaleUnit,
-    scaleLabel: manifest.scaleLabel,
-    measurements: manifest.measurements,
-    walls: manifest.walls,
-    wallsVisible: manifest.wallsVisible,
-    shapes: manifest.shapes,
-    masses: manifest.masses,
-    massBaseAnchor: manifest.massBaseAnchor,
-    layers: savedLayers,
-  };
+  const studio_document = buildStudioDocument(manifest, savedLayers);
 
   const existingMeta = (project.metadata || {}) as Record<string, unknown>;
   const nextMetadata = {

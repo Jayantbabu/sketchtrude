@@ -15,6 +15,7 @@ export type StudioDocument = {
   savedAt: number;
   doc: { wmm: number; hmm: number; dpi: number };
   infiniteCanvas?: boolean;
+  autoExpandCanvas?: boolean;
   paperBg?: string;
   grid?: { show: boolean; type?: string; spacingMM?: number };
   activeLayer?: number;
