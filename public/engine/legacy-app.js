@@ -763,20 +763,32 @@ function _capHistory(layer) {
 }
 function _blitRegion(full, region, x, y) {
   if (!full || !region) return;
-  const fw = full.width, rw = region.width, rh = region.height;
-  for (let row = 0; row < rh; row++) {
-    const dst = ((y + row) * fw + x) * 4;
-    const src = row * rw * 4;
-    full.data.set(region.data.subarray(src, src + rw * 4), dst);
+  const fw = full.width, fh = full.height, rw = region.width, rh = region.height;
+  const srcX = Math.max(0, -x), srcY = Math.max(0, -y);
+  const dstX = Math.max(0, x), dstY = Math.max(0, y);
+  const copyW = Math.min(rw - srcX, fw - dstX);
+  const copyH = Math.min(rh - srcY, fh - dstY);
+  if (copyW <= 0 || copyH <= 0) return;
+  for (let row = 0; row < copyH; row++) {
+    const dst = ((dstY + row) * fw + dstX) * 4;
+    const src = ((srcY + row) * rw + srcX) * 4;
+    full.data.set(region.data.subarray(src, src + copyW * 4), dst);
   }
 }
 // Slice a w×h region out of a full ImageData into a new ImageData.
 function _extractRegion(full, x, y, w, h) {
   const out = new ImageData(w, h);
-  const fw = full.width;
-  for (let row = 0; row < h; row++) {
-    const src = ((y + row) * fw + x) * 4;
-    out.data.set(full.data.subarray(src, src + w * 4), row * w * 4);
+  if (!full) return out;
+  const fw = full.width, fh = full.height;
+  const srcX = Math.max(0, x), srcY = Math.max(0, y);
+  const dstX = Math.max(0, -x), dstY = Math.max(0, -y);
+  const copyW = Math.min(w - dstX, fw - srcX);
+  const copyH = Math.min(h - dstY, fh - srcY);
+  if (copyW <= 0 || copyH <= 0) return out;
+  for (let row = 0; row < copyH; row++) {
+    const src = ((srcY + row) * fw + srcX) * 4;
+    const dst = ((dstY + row) * w + dstX) * 4;
+    out.data.set(full.data.subarray(src, src + copyW * 4), dst);
   }
   return out;
 }
@@ -811,7 +823,7 @@ function pushRegionSnapshot(layer, x, y, before, after) {
   try {
     layer.history.push({ x, y, before, after });
     layer.redo = [];
-    if (!layer._cur) layer._cur = layer.ctx.getImageData(0, 0, DOC_W_PX, DOC_H_PX);
+    if (!layer._cur || layer._cur.width !== DOC_W_PX || layer._cur.height !== DOC_H_PX) layer._cur = layer.ctx.getImageData(0, 0, DOC_W_PX, DOC_H_PX);
     else _blitRegion(layer._cur, after, x, y);
     _capHistory(layer);
     layer._dirty = true;
@@ -9343,16 +9355,32 @@ function notifyAutosaveWaiters() {
   waiters.forEach((resolve) => resolve());
 }
 
-function idb() {
-  if (_idbPromise) return _idbPromise;
-  _idbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(AUTOSAVE_DB, 1);
+function openAutosaveDb(version) {
+  return new Promise((resolve, reject) => {
+    const req = version ? indexedDB.open(AUTOSAVE_DB, version) : indexedDB.open(AUTOSAVE_DB);
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(AUTOSAVE_STORE)) req.result.createObjectStore(AUTOSAVE_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
-  }).catch(() => null);
+    req.onblocked = () => reject(new Error('Autosave database upgrade blocked'));
+  });
+}
+
+function idb() {
+  if (_idbPromise) return _idbPromise;
+  _idbPromise = openAutosaveDb()
+    .then((db) => {
+      if (db.objectStoreNames.contains(AUTOSAVE_STORE)) return db;
+      const nextVersion = db.version + 1;
+      db.close();
+      return openAutosaveDb(nextVersion);
+    })
+    .catch((e) => {
+      console.warn('Autosave database unavailable:', e);
+      _idbPromise = null;
+      return null;
+    });
   return _idbPromise;
 }
 
