@@ -9330,7 +9330,17 @@ function autosaveKey() {
   return (typeof window !== 'undefined' && window.__SKETCHTRUDE_PROJECT_ID) || 'current';
 }
 let _autosaveTimer = null, _autosaveBusy = false, _autosaveSuspended = false;
+let _autosaveWaiters = [];
 let _idbPromise = null;
+
+function waitForAutosave() {
+  return new Promise((resolve) => _autosaveWaiters.push(resolve));
+}
+
+function notifyAutosaveWaiters() {
+  const waiters = _autosaveWaiters.splice(0);
+  waiters.forEach((resolve) => resolve());
+}
 
 function idb() {
   if (_idbPromise) return _idbPromise;
@@ -9391,7 +9401,8 @@ function massesForSave() {
   try { return JSON.parse(JSON.stringify(massing.masses || [], skip)); } catch (e) { return []; }
 }
 async function saveDoc() {
-  if (_autosaveBusy || _autosaveSuspended || !state.layers.length) return;
+  if (_autosaveBusy) return waitForAutosave();
+  if (_autosaveSuspended || !state.layers.length) return;
   if (state.drawing) { scheduleAutosave(); return; }   // defer until not drawing
   _autosaveBusy = true;
   try {
@@ -9452,12 +9463,23 @@ async function saveDoc() {
     console.warn('Autosave failed:', e);
   } finally {
     _autosaveBusy = false;
+    notifyAutosaveWaiters();
   }
 }
 
 let _lastDocPayload = null;
 let _cloudSyncTimer = null;
 let _cloudSyncInFlight = false;
+let _cloudSyncWaiters = [];
+
+function waitForCloudSync() {
+  return new Promise((resolve) => _cloudSyncWaiters.push(resolve));
+}
+
+function notifyCloudSyncWaiters() {
+  const waiters = _cloudSyncWaiters.splice(0);
+  waiters.forEach((resolve) => resolve());
+}
 
 function scheduleCloudSync() {
   if (!_lastDocPayload) return;
@@ -9485,7 +9507,11 @@ async function uploadLayerRaster(pid, index, blob) {
 
 async function flushCloudSync() {
   const pid = typeof window !== 'undefined' ? window.__SKETCHTRUDE_PROJECT_ID : null;
-  if (!pid || pid === 'local' || !_lastDocPayload || _cloudSyncInFlight) return;
+  if (_cloudSyncInFlight) {
+    await waitForCloudSync();
+    return flushCloudSync();
+  }
+  if (!pid || pid === 'local' || !_lastDocPayload) return;
   _cloudSyncInFlight = true;
   try {
     const payload = _lastDocPayload;
@@ -9495,11 +9521,14 @@ async function flushCloudSync() {
       let raster_path = l.raster_path || null;
       if (l.blob && l.blob.size > 0) {
         const uploaded = await uploadLayerRaster(pid, i, l.blob);
-        if (uploaded) {
-          raster_path = uploaded;
-          const live = state.layers[i];
-          if (live) live._rasterPath = uploaded;
+        if (!uploaded) {
+          console.warn('Cloud save skipped: missing uploaded raster for layer', i);
+          return;
         }
+        raster_path = uploaded;
+        const live = state.layers[i];
+        if (live) live._rasterPath = uploaded;
+        l.raster_path = uploaded;
       }
       layerMeta.push({
         name: l.name,
@@ -9545,6 +9574,7 @@ async function flushCloudSync() {
     console.warn('Cloud save failed:', e);
   } finally {
     _cloudSyncInFlight = false;
+    notifyCloudSyncWaiters();
   }
 }
 
@@ -9592,6 +9622,31 @@ async function loadSavedDoc() {
   });
 }
 
+function savedDocHasPixels(doc) {
+  return !!doc?.layers?.some((layer) => layer?.blob && layer.blob.size > 0);
+}
+
+function savedDocHasVectors(doc) {
+  return ['measurements', 'walls', 'shapes', 'masses'].some((key) => Array.isArray(doc?.[key]) && doc[key].length > 0);
+}
+
+function isRestorableDoc(doc) {
+  return !!doc?.layers?.length && (savedDocHasPixels(doc) || savedDocHasVectors(doc));
+}
+
+function chooseSavedDoc(localDoc, cloudDoc) {
+  const localRestorable = isRestorableDoc(localDoc);
+  const cloudRestorable = isRestorableDoc(cloudDoc);
+  if (localRestorable && !cloudRestorable) return localDoc;
+  if (cloudRestorable && !localRestorable) return cloudDoc;
+  if (localRestorable && cloudRestorable) {
+    const localSavedAt = Number(localDoc.savedAt) || 0;
+    const cloudSavedAt = Number(cloudDoc.savedAt) || 0;
+    return cloudSavedAt > localSavedAt ? cloudDoc : localDoc;
+  }
+  return cloudDoc || localDoc;
+}
+
 async function clearSavedDoc() {
   const db = await idb();
   if (!db) return;
@@ -9609,11 +9664,10 @@ function removeAllLayers() {
 
 // Returns true if a session was restored.
 async function restoreSession() {
-  let saved;
-  try { saved = await loadCloudDocument(); } catch { saved = null; }
-  if (!saved) {
-    try { saved = await loadSavedDoc(); } catch { saved = null; }
-  }
+  let cloudSaved = null, localSaved = null;
+  try { localSaved = await loadSavedDoc(); } catch { localSaved = null; }
+  try { cloudSaved = await loadCloudDocument(); } catch { cloudSaved = null; }
+  const saved = chooseSavedDoc(localSaved, cloudSaved);
   if (!saved || !saved.layers || !saved.layers.length) return false;
   _autosaveSuspended = true;
   try {
@@ -9690,7 +9744,7 @@ window.addEventListener('message', async (e) => {
     try {
       for (let i = 0; i < 30; i++) {
         await saveDoc();
-        if (_lastDocPayload && !_autosaveBusy) break;
+        if (_lastDocPayload && !_autosaveBusy && !state.layers.some(l => l._dirty)) break;
         await new Promise((r) => setTimeout(r, 100));
       }
       clearTimeout(_cloudSyncTimer);

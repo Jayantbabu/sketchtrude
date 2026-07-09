@@ -140,11 +140,14 @@ export async function PUT(request: Request, context: RouteContext) {
 
   const { manifest, files } = parsed;
   const layerCount = manifest.layer_count ?? manifest.layers?.length ?? 0;
+  const existingMeta = (project.metadata || {}) as Record<string, unknown>;
+  const existingStudioDocument = readStudioDocument(existingMeta);
   const savedLayers = [];
 
   for (let i = 0; i < layerCount; i++) {
     const meta = manifest.layers?.[i];
-    let raster_path = meta?.raster_path ?? null;
+    let raster_path =
+      meta?.raster_path ?? existingStudioDocument?.layers?.[i]?.raster_path ?? null;
     const file = files.get(i);
 
     if (file) {
@@ -161,6 +164,13 @@ export async function PUT(request: Request, context: RouteContext) {
       }
     }
 
+    if (!raster_path) {
+      return NextResponse.json(
+        { error: `Missing raster for layer ${i}` },
+        { status: 400 },
+      );
+    }
+
     savedLayers.push({
       name: meta?.name || `Layer ${i + 1}`,
       visible: meta?.visible !== false,
@@ -173,7 +183,6 @@ export async function PUT(request: Request, context: RouteContext) {
 
   const studio_document = buildStudioDocument(manifest, savedLayers);
 
-  const existingMeta = (project.metadata || {}) as Record<string, unknown>;
   const nextMetadata = {
     ...existingMeta,
     studio_document,
