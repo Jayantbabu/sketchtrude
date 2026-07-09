@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#a02835">
+  <title>SketchTrude Studio</title>
+  <link rel="icon" type="image/png" href="/logo.png">
+  <link rel="stylesheet" href="/styles/studio.css">
+</head>
+<body>
+  <div id="studio-mount"></div>
+  <script>
+    (async function () {
+      const params = new URLSearchParams(location.search);
+      const projectId = params.get('project') || 'local';
+      window.__SKETCHTRUDE_PROJECT_ID = projectId;
+
+      if (projectId && projectId !== 'local') {
+        try {
+          const pres = await fetch('/api/projects/' + projectId);
+          if (pres.ok) {
+            window.__SKETCHTRUDE_PROJECT_CONFIG = await pres.json();
+          }
+        } catch (_) { /* offline / unauthenticated — engine uses defaults */ }
+      }
+
+      const res = await fetch('/engine/studio-body.html');
+      const html = await res.text();
+      const mount = document.getElementById('studio-mount');
+      mount.innerHTML = html;
+
+      const logo = document.getElementById('logo');
+      if (logo) logo.src = '/logo.png';
+
+      const helpers = document.createElement('script');
+      helpers.src = '/engine/studio-helpers.js';
+      helpers.async = false;
+      document.body.appendChild(helpers);
+
+      const script = document.createElement('script');
+      script.src = '/engine/legacy-app.js';
+      script.async = false;
+      document.body.appendChild(script);
+    })();
+  </script>
+</body>
+</html>
