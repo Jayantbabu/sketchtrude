@@ -18,14 +18,15 @@
 
       if (projectId && projectId !== 'local') {
         try {
-          const pres = await fetch('/api/projects/' + projectId);
+          const pres = await fetch('/api/projects/' + projectId, { credentials: 'same-origin' });
           if (pres.ok) {
             window.__SKETCHTRUDE_PROJECT_CONFIG = await pres.json();
           }
         } catch (_) { /* offline / unauthenticated — engine uses defaults */ }
       }
 
-      const res = await fetch('/engine/studio-body.html');
+      const res = await fetch('/engine/studio-body.html', { credentials: 'same-origin' });
+      if (!res.ok) throw new Error('Failed to load studio UI');
       const html = await res.text();
       const mount = document.getElementById('studio-mount');
       mount.innerHTML = html;
@@ -42,7 +43,13 @@
       script.src = '/engine/legacy-app.js';
       script.async = false;
       document.body.appendChild(script);
-    })();
+    })().catch((err) => {
+      const mount = document.getElementById('studio-mount');
+      if (mount) {
+        mount.innerHTML = '<div style="padding:24px;font-family:system-ui;color:#333;"><h2>Studio failed to load</h2><p>Please refresh or sign in again.</p></div>';
+      }
+      console.error('Studio boot failed:', err);
+    });
   </script>
 </body>
 </html>

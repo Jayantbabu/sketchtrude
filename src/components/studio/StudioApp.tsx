@@ -9,6 +9,26 @@ type StudioAppProps = {
   projectTitle: string;
 };
 
+function waitForStudioSave(projectId: string, iframe: HTMLIFrameElement) {
+  return new Promise<void>((resolve) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      resolve();
+    }, 10000);
+
+    function onMessage(event: MessageEvent) {
+      if (event.data?.type !== "sketchtrude-save-done") return;
+      if (event.data?.projectId && event.data.projectId !== projectId) return;
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
+      resolve();
+    }
+
+    window.addEventListener("message", onMessage);
+    iframe.contentWindow?.postMessage({ type: "sketchtrude-save" }, "*");
+  });
+}
+
 export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
   const router = useRouter();
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -21,12 +41,11 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
 
     const iframe = iframeRef.current;
     if (iframe?.contentWindow) {
-      iframe.contentWindow.postMessage({ type: "sketchtrude-save" }, "*");
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await waitForStudioSave(projectId, iframe);
     }
 
     router.push("/dashboard");
-  }, [navigating, router]);
+  }, [navigating, projectId, router]);
 
   return (
     <>

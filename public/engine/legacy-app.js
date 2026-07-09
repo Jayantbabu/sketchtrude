@@ -3740,7 +3740,7 @@ function syncProjectThumbnail(blob) {
     try {
       const fd = new FormData();
       fd.append('file', blob, 'preview.jpg');
-      await fetch('/api/projects/' + pid + '/thumbnail', { method: 'POST', body: fd });
+      await fetch('/api/projects/' + pid + '/thumbnail', { method: 'POST', body: fd, credentials: 'same-origin' });
     } catch (_) { /* offline — local thumb still works */ }
   }, 1200);
 }
@@ -9437,10 +9437,91 @@ async function saveDoc() {
         tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
       });
     }
+    _lastDocPayload = payload;
+    scheduleCloudSync();
   } catch (e) {
     console.warn('Autosave failed:', e);
   } finally {
     _autosaveBusy = false;
+  }
+}
+
+let _lastDocPayload = null;
+let _cloudSyncTimer = null;
+let _cloudSyncInFlight = false;
+
+function scheduleCloudSync() {
+  if (!_lastDocPayload) return;
+  clearTimeout(_cloudSyncTimer);
+  _cloudSyncTimer = setTimeout(() => { flushCloudSync(); }, 8000);
+}
+
+async function flushCloudSync() {
+  const pid = typeof window !== 'undefined' ? window.__SKETCHTRUDE_PROJECT_ID : null;
+  if (!pid || pid === 'local' || !_lastDocPayload || _cloudSyncInFlight) return;
+  _cloudSyncInFlight = true;
+  try {
+    const payload = _lastDocPayload;
+    const fd = new FormData();
+    const layerMeta = payload.layers.map((l) => ({
+      name: l.name,
+      visible: l.visible,
+      opacity: l.opacity,
+      trace: l.trace,
+      blendMode: l.blendMode,
+      raster_path: l.raster_path || null,
+    }));
+    const manifest = Object.assign({}, payload, {
+      layers: layerMeta,
+      layer_count: payload.layers.length,
+    });
+    fd.append('manifest', JSON.stringify(manifest));
+    payload.layers.forEach((l, i) => {
+      if (l.blob) fd.append('layer_' + i, l.blob, 'layer-' + i + '.png');
+    });
+    const res = await fetch('/api/projects/' + pid + '/document', {
+      method: 'PUT',
+      body: fd,
+      credentials: 'same-origin',
+    });
+    if (!res.ok) console.warn('Cloud save failed:', res.status);
+  } catch (e) {
+    console.warn('Cloud save failed:', e);
+  } finally {
+    _cloudSyncInFlight = false;
+  }
+}
+
+async function loadCloudDocument() {
+  const pid = typeof window !== 'undefined' ? window.__SKETCHTRUDE_PROJECT_ID : null;
+  if (!pid || pid === 'local') return null;
+  try {
+    const res = await fetch('/api/projects/' + pid + '/document', { credentials: 'same-origin' });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data || !data.layers || !data.layers.length) return null;
+    const layers = [];
+    for (const ld of data.layers) {
+      const entry = {
+        name: ld.name,
+        visible: ld.visible,
+        opacity: ld.opacity,
+        trace: ld.trace,
+        blendMode: ld.blendMode,
+        blob: null,
+      };
+      if (ld.raster_url) {
+        try {
+          const imgRes = await fetch(ld.raster_url);
+          if (imgRes.ok) entry.blob = await imgRes.blob();
+        } catch (_) { /* skip layer image */ }
+      }
+      layers.push(entry);
+    }
+    return Object.assign({}, data, { layers });
+  } catch (e) {
+    console.warn('Cloud load failed:', e);
+    return null;
   }
 }
 
@@ -9473,7 +9554,10 @@ function removeAllLayers() {
 // Returns true if a session was restored.
 async function restoreSession() {
   let saved;
-  try { saved = await loadSavedDoc(); } catch { saved = null; }
+  try { saved = await loadCloudDocument(); } catch { saved = null; }
+  if (!saved) {
+    try { saved = await loadSavedDoc(); } catch { saved = null; }
+  }
   if (!saved || !saved.layers || !saved.layers.length) return false;
   _autosaveSuspended = true;
   try {
@@ -9535,19 +9619,33 @@ async function restoreSession() {
 // Save on page hide/close as a final safety net (debounce may not have fired)
 window.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
-    saveDoc();
+    saveDoc().then(() => flushCloudSync());
     scheduleThumbnail();
   }
 });
 window.addEventListener('pagehide', () => {
-  saveDoc();
+  saveDoc().then(() => flushCloudSync());
   scheduleThumbnail();
 });
 
-window.addEventListener('message', (e) => {
+window.addEventListener('message', async (e) => {
   if (e.data?.type === 'sketchtrude-save') {
-    saveDoc();
-    scheduleThumbnail();
+    try {
+      for (let i = 0; i < 30; i++) {
+        await saveDoc();
+        if (_lastDocPayload && !_autosaveBusy) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      clearTimeout(_cloudSyncTimer);
+      await flushCloudSync();
+      scheduleThumbnail();
+    } catch (_) {}
+    if (window.parent !== window) {
+      window.parent.postMessage({
+        type: 'sketchtrude-save-done',
+        projectId: window.__SKETCHTRUDE_PROJECT_ID,
+      }, '*');
+    }
   }
 });
 
@@ -9564,6 +9662,7 @@ function syncProjectScale(label) {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ scale_label: label }),
+        credentials: 'same-origin',
       });
     } catch (_) { /* offline — IDB still has scale */ }
   }, 400);
