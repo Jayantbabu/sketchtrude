@@ -26,11 +26,11 @@ export function DashboardClient({ initialProjects }: { initialProjects: Project[
         doc_width_mm: template.doc_width_mm,
         doc_height_mm: template.doc_height_mm,
         doc_dpi: template.doc_dpi,
-        scale_label: template.scale_label,
+        scale_label: template.scale_label ?? null,
         metadata: {
           ...template.metadata,
           infinite_canvas: !!template.infinite_canvas,
-          auto_expand: !!(template.auto_expand || template.infinite_canvas),
+          auto_expand: false,
         },
       }),
     });
@@ -122,7 +122,7 @@ export function DashboardClient({ initialProjects }: { initialProjects: Project[
                   <h3>{project.title}</h3>
                   <p className="project-meta">
                     {new Date(project.updated_at).toLocaleDateString()} ·{" "}
-                    {project.scale_label || "1:50"}
+                    {project.scale_label || "Scale unset"}
                   </p>
                 </div>
               </button>

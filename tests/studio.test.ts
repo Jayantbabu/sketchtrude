@@ -44,13 +44,15 @@ describe("paper templates", () => {
     const scale = getPaperTemplate("scale-grid");
     expect(scale?.metadata.show_grid).toBe(true);
     expect(scale?.metadata.grid_spacing_mm).toBe(5);
-    expect(scale?.metadata.auto_expand).toBe(true);
+    expect(scale?.metadata.auto_expand).toBe(false);
+    expect(scale?.scale_label).toBeNull();
   });
 
-  it("enables auto-expand on grid and infinite papers", () => {
-    expect(resolveAutoExpandFromMetadata(getPaperTemplate("basic-grid")!.metadata)).toBe(true);
-    expect(resolveAutoExpandFromMetadata(getPaperTemplate("infinite")!.metadata)).toBe(true);
+  it("disables auto-expand on all papers including infinite", () => {
+    expect(resolveAutoExpandFromMetadata(getPaperTemplate("basic-grid")!.metadata)).toBe(false);
+    expect(resolveAutoExpandFromMetadata(getPaperTemplate("infinite")!.metadata)).toBe(false);
     expect(resolveAutoExpandFromMetadata(getPaperTemplate("blank")!.metadata)).toBe(false);
+    expect(getPaperTemplate("infinite")?.infinite_canvas).toBe(true);
   });
 });
 
@@ -81,13 +83,13 @@ describe("2D zoom helpers", () => {
 });
 
 describe("canvas auto-expand", () => {
-  it("expands when infinite or auto-expand flags are set", () => {
-    expect(shouldAutoExpandCanvas({ infiniteCanvas: true })).toBe(true);
-    expect(shouldAutoExpandCanvas({ autoExpandCanvas: true })).toBe(true);
+  it("never auto-expands (feature removed)", () => {
+    expect(shouldAutoExpandCanvas({ infiniteCanvas: true })).toBe(false);
+    expect(shouldAutoExpandCanvas({ autoExpandCanvas: true })).toBe(false);
     expect(shouldAutoExpandCanvas({})).toBe(false);
   });
 
-  it("detects edges within threshold", () => {
+  it("still detects edges within threshold for tooling", () => {
     const edges = shouldExpandAtEdge(100, 3400, 2480, 3508, 140);
     expect(edges.left).toBe(true);
     expect(edges.right).toBe(false);
@@ -182,7 +184,7 @@ describe("drawing and navigation scenarios", () => {
     const grid = getPaperTemplate("3d-grid");
     expect(grid?.metadata.guide_type).toBe("iso");
     expect(grid?.metadata.show_grid).toBe(true);
-    expect(grid?.metadata.auto_expand).toBe(true);
+    expect(grid?.metadata.auto_expand).toBe(false);
   });
 
   it("keeps pan math stable for repeated drags", () => {

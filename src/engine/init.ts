@@ -21,17 +21,26 @@ export async function initStudioEngine(options: EngineInitOptions): Promise<void
   (window as Window & { __SKETCHTRUDE_PROJECT_ID?: string }).__SKETCHTRUDE_PROJECT_ID =
     projectId;
 
-  // Load legacy engine script
+  // Load Phase 2B interaction core, then legacy engine
   await new Promise<void>((resolve, reject) => {
-    engineScriptEl = document.createElement("script");
-    engineScriptEl.src = "/engine/legacy-app.js";
-    engineScriptEl.async = false;
-    engineScriptEl.onload = () => {
-      initialized = true;
-      resolve();
+    const interactionEl = document.createElement("script");
+    interactionEl.src = "/engine/interaction-core.js";
+    interactionEl.async = false;
+    interactionEl.onload = () => {
+      engineScriptEl = document.createElement("script");
+      engineScriptEl.src = "/engine/legacy-app.js";
+      engineScriptEl.async = false;
+      engineScriptEl.onload = () => {
+        initialized = true;
+        resolve();
+      };
+      engineScriptEl.onerror = () =>
+        reject(new Error("Failed to load studio engine"));
+      document.body.appendChild(engineScriptEl);
     };
-    engineScriptEl.onerror = () => reject(new Error("Failed to load studio engine"));
-    document.body.appendChild(engineScriptEl);
+    interactionEl.onerror = () =>
+      reject(new Error("Failed to load interaction core"));
+    document.body.appendChild(interactionEl);
   });
 
   options.onSave?.();

@@ -47,8 +47,11 @@ export async function POST(request: Request) {
       doc_width_mm: body.doc_width_mm ?? 420,
       doc_height_mm: body.doc_height_mm ?? 297,
       doc_dpi: body.doc_dpi ?? 150,
-      scale_label: body.scale_label ?? "1:50",
-      metadata: body.metadata ?? {},
+      scale_label: body.scale_label ?? null,
+      metadata: {
+        ...(body.metadata ?? {}),
+        auto_expand: false,
+      },
     })
     .select()
     .single();

@@ -5,9 +5,9 @@ export type PaperTemplate = {
   doc_width_mm: number;
   doc_height_mm: number;
   doc_dpi: number;
-  scale_label: string;
+  /** Scale is unset until the user defines it while sketching. */
+  scale_label: string | null;
   infinite_canvas?: boolean;
-  auto_expand?: boolean;
   preview?: string;
   previewStyle?: string;
   metadata: Record<string, unknown>;
@@ -21,25 +21,28 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
-    auto_expand: true,
+    scale_label: null,
     preview: "#ffffff",
-    metadata: { template: "blank", paper_bg: "#ffffff", auto_expand: true },
+    metadata: { template: "blank", paper_bg: "#ffffff", auto_expand: false },
   },
   {
     id: "infinite",
     name: "Infinite Canvas",
-    description: "Borderless sketch space — expands as you draw",
-    doc_width_mm: 420,
-    doc_height_mm: 297,
+    description: "Borderless sketch space — draw anywhere",
+    doc_width_mm: 1600,
+    doc_height_mm: 1600,
     doc_dpi: 150,
-    scale_label: "1:50",
+    scale_label: null,
     infinite_canvas: true,
-    auto_expand: true,
     preview: "#ffffff",
     previewStyle:
       "repeating-linear-gradient(45deg,#f5f5f5 0,#f5f5f5 2px,#ffffff 2px,#ffffff 8px)",
-    metadata: { template: "infinite", infinite_canvas: true, paper_bg: "#ffffff", auto_expand: true },
+    metadata: {
+      template: "infinite",
+      infinite_canvas: true,
+      paper_bg: "#ffffff",
+      auto_expand: false,
+    },
   },
   {
     id: "blueprint",
@@ -48,13 +51,12 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
-    auto_expand: true,
+    scale_label: null,
     preview: "#1e3a5f",
     metadata: {
       template: "blueprint",
       paper_bg: "#1e3a5f",
-      auto_expand: true,
+      auto_expand: false,
       show_grid: true,
       grid_type: "square",
       grid_spacing_mm: 5,
@@ -68,13 +70,12 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
-    auto_expand: true,
+    scale_label: null,
     preview: "#2a2a2e",
     metadata: {
       template: "charcoal-blueprint",
       paper_bg: "#2a2a2e",
-      auto_expand: true,
+      auto_expand: false,
       show_grid: true,
       grid_type: "square",
       grid_spacing_mm: 5,
@@ -88,10 +89,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
-    auto_expand: true,
+    scale_label: null,
     preview: "#c4a574",
-    metadata: { template: "kraft", paper_bg: "#c4a574", auto_expand: true },
+    metadata: { template: "kraft", paper_bg: "#c4a574", auto_expand: false },
   },
   {
     id: "trace-yellow",
@@ -100,10 +100,14 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
-    auto_expand: true,
+    scale_label: null,
     preview: "#fff8e1",
-    metadata: { template: "trace-yellow", paper_bg: "#fff8e1", trace_tint: 0.35, auto_expand: true },
+    metadata: {
+      template: "trace-yellow",
+      paper_bg: "#fff8e1",
+      trace_tint: 0.35,
+      auto_expand: false,
+    },
   },
   {
     id: "basic-grid",
@@ -112,14 +116,14 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
+    scale_label: null,
     preview: "#ffffff",
     previewStyle:
       "linear-gradient(#000 1px,transparent 1px),linear-gradient(90deg,#000 1px,transparent 1px)",
     metadata: {
       template: "basic-grid",
       paper_bg: "#ffffff",
-      auto_expand: true,
+      auto_expand: false,
       show_grid: true,
       grid_type: "square",
       grid_spacing_mm: 10,
@@ -132,14 +136,14 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
+    scale_label: null,
     preview: "#ffffff",
     previewStyle:
       "linear-gradient(#333 1px,transparent 1px),linear-gradient(90deg,#333 1px,transparent 1px)",
     metadata: {
       template: "scale-grid",
       paper_bg: "#ffffff",
-      auto_expand: true,
+      auto_expand: false,
       show_grid: true,
       grid_type: "square",
       grid_spacing_mm: 5,
@@ -153,14 +157,14 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
+    scale_label: null,
     preview: "#ffffff",
     previewStyle:
       "linear-gradient(135deg,transparent 48%,#666 49%,#666 51%,transparent 52%)",
     metadata: {
       template: "perspective-grid",
       paper_bg: "#ffffff",
-      auto_expand: true,
+      auto_expand: false,
       guide_type: "perspective",
       guide_opacity: 0.35,
     },
@@ -173,14 +177,14 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
+    scale_label: null,
     preview: "#ffffff",
     previewStyle:
       "linear-gradient(30deg,transparent 48%,#888 49%,#888 51%,transparent 52%),linear-gradient(150deg,transparent 48%,#888 49%,#888 51%,transparent 52%)",
     metadata: {
       template: "iso-grid",
       paper_bg: "#ffffff",
-      auto_expand: true,
+      auto_expand: false,
       guide_type: "iso",
       guide_opacity: 0.35,
     },
@@ -192,14 +196,14 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
+    scale_label: null,
     preview: "#ffffff",
     previewStyle:
       "linear-gradient(#555 1px,transparent 1px),linear-gradient(90deg,#555 1px,transparent 1px),linear-gradient(135deg,transparent 48%,#555 49%,#555 51%,transparent 52%)",
     metadata: {
       template: "3d-grid",
       paper_bg: "#ffffff",
-      auto_expand: true,
+      auto_expand: false,
       guide_type: "iso",
       show_grid: true,
       grid_type: "square",
@@ -214,10 +218,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 210,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
-    auto_expand: true,
+    scale_label: null,
     preview: "#ffffff",
-    metadata: { template: "a4-portrait", paper_bg: "#ffffff", auto_expand: true },
+    metadata: { template: "a4-portrait", paper_bg: "#ffffff", auto_expand: false },
   },
   {
     id: "a3-landscape",
@@ -226,10 +229,9 @@ export const PAPER_TEMPLATES: PaperTemplate[] = [
     doc_width_mm: 420,
     doc_height_mm: 297,
     doc_dpi: 150,
-    scale_label: "1:50",
-    auto_expand: true,
+    scale_label: null,
     preview: "#ffffff",
-    metadata: { template: "a3-landscape", paper_bg: "#ffffff", auto_expand: true },
+    metadata: { template: "a3-landscape", paper_bg: "#ffffff", auto_expand: false },
   },
 ];
 

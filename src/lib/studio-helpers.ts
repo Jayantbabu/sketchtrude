@@ -108,21 +108,18 @@ export function activeRailHighlight(
   return massingActive ? "massing" : tool;
 }
 
+/** Auto-expand is removed — canvases are fixed-size (infinite uses a large world). */
 export function resolveAutoExpandFromMetadata(
-  meta: Record<string, unknown>,
+  _meta: Record<string, unknown>,
 ): boolean {
-  return !!(
-    meta.infinite_canvas ||
-    meta.auto_expand ||
-    meta.show_grid
-  );
+  return false;
 }
 
-export function shouldAutoExpandCanvas(flags: {
+export function shouldAutoExpandCanvas(_flags: {
   infiniteCanvas?: boolean;
   autoExpandCanvas?: boolean;
 }): boolean {
-  return !!(flags.infiniteCanvas || flags.autoExpandCanvas);
+  return false;
 }
 
 export function shouldExpandAtEdge(

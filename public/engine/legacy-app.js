@@ -89,6 +89,62 @@ const state = {
   lineDrag: null,
 };
 
+// ---- Phase 2B: shared selection + stable shape IDs ----
+const __ix = (typeof window !== 'undefined' && window.SketchtrudeInteraction) || null;
+function ensureShapeId(shape) {
+  if (__ix) return __ix.ensureShapeId(shape);
+  if (shape && typeof shape.id === 'string' && shape.id) return shape.id;
+  if (!shape) return 'shape_' + Date.now().toString(36);
+  shape.id = 'shape_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  return shape.id;
+}
+function ensureAllShapeIds(shapes) {
+  if (__ix) return __ix.ensureAllShapeIds(shapes);
+  return (shapes || []).map(ensureShapeId);
+}
+function pushShapeEntity(entity) {
+  ensureShapeId(entity);
+  state.shapes.push(entity);
+  return entity.id;
+}
+/** Sync legacy state.sel with SelectionManager (selection-only — never dirty). */
+function syncSelectionManagerFromLegacy(source) {
+  if (!__ix || !__ix.selectionManager) return;
+  const src = source || 'programmatic';
+  const sel = state.sel;
+  if (sel && sel.type === 'shape' && typeof sel.idx === 'number') {
+    const sh = state.shapes[sel.idx];
+    if (sh) {
+      const id = ensureShapeId(sh);
+      __ix.selectionManager.select(id, src);
+      return;
+    }
+  }
+  __ix.selectionManager.clear(src);
+}
+function selectShapeById(objectId, source) {
+  if (!objectId) {
+    state.sel = null;
+    syncSelectionManagerFromLegacy(source || 'programmatic');
+    return false;
+  }
+  const idx = (state.shapes || []).findIndex(s => s && s.id === objectId);
+  if (idx < 0) return false;
+  state.sel = { type: 'shape', idx, id: objectId };
+  state.selOpening2D = null;
+  if (typeof showOpeningPalette === 'function') showOpeningPalette(false);
+  if (typeof showSelectBar === 'function') showSelectBar('shape');
+  syncSelectionManagerFromLegacy(source || 'layer-panel');
+  if (typeof refreshMeasurements === 'function') refreshMeasurements();
+  return true;
+}
+if (__ix && __ix.selectionManager) {
+  window.addEventListener('sketchtrude-layer-select', (ev) => {
+    const id = ev && ev.detail && ev.detail.objectId;
+    if (id) selectShapeById(id, 'layer-panel');
+  });
+}
+
 // Built-in brushes use the same schema as custom brushes.
 // Schema: { id, name, displayName, tipType, tipImage, size, opacity, spacing,
 //           hardness, pressureSize, pressureOpacity, jitter, blend, builtIn,
@@ -436,14 +492,8 @@ function expandDocumentPixels(addLeft, addTop, addRight, addBottom) {
 const CANVAS_EXPAND_PX = 900;
 const CANVAS_EXPAND_THRESHOLD = 140;
 
-function maybeExpandCanvas(x, y) {
-  if (!state.infiniteCanvas && !state.autoExpandCanvas) return;
-  let addL = 0, addT = 0, addR = 0, addB = 0;
-  if (x < CANVAS_EXPAND_THRESHOLD) addL = CANVAS_EXPAND_PX;
-  if (x > DOC_W_PX - CANVAS_EXPAND_THRESHOLD) addR = CANVAS_EXPAND_PX;
-  if (y < CANVAS_EXPAND_THRESHOLD) addT = CANVAS_EXPAND_PX;
-  if (y > DOC_H_PX - CANVAS_EXPAND_THRESHOLD) addB = CANVAS_EXPAND_PX;
-  if (addL || addT || addR || addB) expandDocumentPixels(addL, addT, addR, addB);
+function maybeExpandCanvas(_x, _y) {
+  // Phase 1: never auto-expand — infinite canvas is a large fixed world.
 }
 
 function releaseTransientInput() {
@@ -843,8 +893,10 @@ function vectorSnapshot() {
 function applyVectorSnapshot(s) {
   state.walls = JSON.parse(JSON.stringify(s.walls || []));
   state.shapes = JSON.parse(JSON.stringify(s.shapes || []));
+  ensureAllShapeIds(state.shapes);
   state.measurements = JSON.parse(JSON.stringify(s.measurements || []));
   state.sel = null; state.selOpening2D = null;
+  syncSelectionManagerFromLegacy('programmatic');
   if (typeof showSelectBar === 'function') showSelectBar(null);
   if (typeof showOpeningPalette === 'function') showOpeningPalette(state.tool === 'opening');
   if (typeof refreshMeasurements === 'function') refreshMeasurements();
@@ -1875,7 +1927,7 @@ function endPointer(e) {
         }
       }
       state._shapeEnd = null;
-      if (entity) { const __b = vectorSnapshot(); state.shapes.push(entity); recordVec(__b); scheduleAutosave(); }
+      if (entity) { const __b = vectorSnapshot(); pushShapeEntity(entity); recordVec(__b); scheduleAutosave(); }
       renderLayers(); refreshMeasurements();
       if (geom && typeof onShapeCommitted === 'function') onShapeCommitted(geom, { x: e.clientX, y: e.clientY });
     }
@@ -2491,6 +2543,7 @@ function setTool(tool) {
   if (tool !== 'opening') { state.selOpening2D = null; }
   else updateOpeningPalette();
   const _hadSel = !!state.sel; state.sel = null;
+  syncSelectionManagerFromLegacy('programmatic');
   if (typeof showSelectBar === 'function') showSelectBar(null);
   if (tool !== 'offset' && state.offset) { state.offset = null; if (typeof showOffsetBar === 'function') showOffsetBar(false); }
   if (_hadSel && typeof refreshMeasurements === 'function') refreshMeasurements();
@@ -5440,7 +5493,7 @@ function commitPolygonShape(closed) {
   if (pts.length < 2) { cancelPoly(); return; }
   const isPolygon = closed && pts.length >= 3;
   const entity = { kind: 'polygon', pts: pts.map(p => ({ x: p.x, y: p.y })), closed: !!closed, stroke: state.color, width: Math.max(0.5, state.size) };
-  const __b = vectorSnapshot(); state.shapes.push(entity); recordVec(__b); scheduleAutosave();
+  const __b = vectorSnapshot(); pushShapeEntity(entity); recordVec(__b); scheduleAutosave();
   // Rasterize onto the active layer so eraser and partial edits work
   const l = activeLayer();
   l.ctx.save();
@@ -5730,7 +5783,9 @@ function renderOneWall(w, svgns, wi) {
 function renderShapes2D() {
   const svgns = 'http://www.w3.org/2000/svg';
   (state.shapes || []).forEach((sh, si) => {
-    const selSh = state.sel && state.sel.type === 'shape' && state.sel.idx === si;
+    const selSh = state.sel && state.sel.type === 'shape' && (
+      state.sel.idx === si || (state.sel.id && sh.id && state.sel.id === sh.id)
+    );
     const stroke = selSh ? '#a02835' : (sh.stroke || '#1c1a18');
     const w = sh.width || 2;
     if (sh.kind === 'ellipse') {
@@ -5963,19 +6018,31 @@ function selectEntityAt(p) {
   const op = openingHitTest2D(p);
   if (op) {
     state.sel = { type: 'opening', wi: op.wi, idx: op.idx }; state.selOpening2D = op;
-    showSelectBar(null); showOpeningPalette(true); updateOpeningPalette(); refreshMeasurements();
+    showSelectBar(null); showOpeningPalette(true); updateOpeningPalette();
+    syncSelectionManagerFromLegacy('canvas');
+    refreshMeasurements();
     showHint('Door / Window selected — edit in the bar'); return true;
   }
   const wh = wallSegHit(p);
   if (wh) {
     state.sel = { type: 'wall', wi: wh.wi }; state.selOpening2D = null;
-    showOpeningPalette(false); showSelectBar('wall'); refreshMeasurements();
+    showOpeningPalette(false); showSelectBar('wall');
+    syncSelectionManagerFromLegacy('canvas');
+    refreshMeasurements();
     showHint('Wall selected — edit thickness / height or delete'); return true;
   }
   for (let i = (state.shapes || []).length - 1; i >= 0; i--) {
     if (shapeHit(state.shapes[i], p)) {
-      state.sel = { type: 'shape', idx: i }; state.selOpening2D = null;
-      showOpeningPalette(false); showSelectBar('shape'); refreshMeasurements();
+      const sh = state.shapes[i];
+      const id = ensureShapeId(sh);
+      // Capability-gated selection (Phase 2B) — do not fork on type for selectability.
+      if (__ix && __ix.capabilityRegistry && !__ix.capabilityRegistry.get('shape').selectable) {
+        break;
+      }
+      state.sel = { type: 'shape', idx: i, id }; state.selOpening2D = null;
+      showOpeningPalette(false); showSelectBar('shape');
+      syncSelectionManagerFromLegacy('canvas');
+      refreshMeasurements();
       showHint('Shape selected — edit width or delete'); return true;
     }
   }
@@ -5984,9 +6051,12 @@ function selectEntityAt(p) {
     state.selOpening2D = null; showOpeningPalette(false);
     if (mh.type === 'area') { state.sel = { type: 'room', idx: mh.idx }; showSelectBar('room'); showHint('Room selected'); }
     else { state.sel = { type: 'dim', idx: mh.idx }; showSelectBar('dim'); showHint('Dimension selected'); }
+    syncSelectionManagerFromLegacy('canvas');
     refreshMeasurements(); return true;
   }
-  state.sel = null; state.selOpening2D = null; showOpeningPalette(false); showSelectBar(null); refreshMeasurements();
+  state.sel = null; state.selOpening2D = null; showOpeningPalette(false); showSelectBar(null);
+  syncSelectionManagerFromLegacy('canvas');
+  refreshMeasurements();
   showHint('Nothing here — tap a wall, door, window, or room');
   return false;
 }
@@ -6004,7 +6074,7 @@ function ensureSelectBar() {
   if (_selBarEl) return _selBarEl;
   const el = document.createElement('div');
   el.id = 'select-bar';
-  el.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);display:none;gap:10px;align-items:center;flex-wrap:wrap;max-width:94vw;background:rgba(255,255,255,0.97);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(0,0,0,0.10);border-radius:10px;padding:7px 13px;box-shadow:0 6px 22px rgba(0,0,0,0.16);z-index:31;font-size:11px;';
+  el.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);display:none;gap:10px;align-items:center;flex-wrap:wrap;max-width:94vw;background:rgba(255,255,255,0.97);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(0,0,0,0.10);border-radius:10px;padding:7px 13px;box-shadow:0 6px 22px rgba(0,0,0,0.16);z-index:1600;font-size:11px;';
   document.body.appendChild(el);
   _selBarEl = el;
   return el;
@@ -6051,7 +6121,16 @@ function showSelectBar(type) {
       + '<button id="se-del" class="op-mini" style="color:#b00020;">Delete</button>';
     el.querySelector('#se-sw').value = sh.width || 2;
     el.querySelector('#se-sw').addEventListener('input', e => { const v = parseFloat(e.target.value); if (v > 0) { const __b = vectorSnapshot(); sh.width = v; refreshMeasurements(); recordVec(__b, true); scheduleAutosave(); } });
-    el.querySelector('#se-del').onclick = () => { const __b = vectorSnapshot(); state.shapes.splice(sel.idx, 1); state.sel = null; showSelectBar(null); refreshMeasurements(); recordVec(__b); scheduleAutosave(); };
+    el.querySelector('#se-del').onclick = () => {
+      const __b = vectorSnapshot();
+      state.shapes.splice(sel.idx, 1);
+      state.sel = null;
+      syncSelectionManagerFromLegacy('programmatic');
+      showSelectBar(null);
+      refreshMeasurements();
+      recordVec(__b);
+      scheduleAutosave();
+    };
   }
   el.style.display = 'flex';
 }
@@ -7164,8 +7243,8 @@ function applyOffset(){
   const __b=vectorSnapshot();
   if(state.offset.type==='shape'){
     const src=state.shapes[state.offset.idx]||{};
-    if(prev.ellipse){ state.shapes.push({kind:'ellipse',cx:prev.cx,cy:prev.cy,rx:prev.rx,ry:prev.ry,stroke:src.stroke,width:src.width}); }
-    else { state.shapes.push({kind:(src.kind==='rect'?'rect':'polygon'),pts:prev.map(p=>({x:p.x,y:p.y})),closed:true,stroke:src.stroke,width:src.width}); }
+    if(prev.ellipse){ pushShapeEntity({kind:'ellipse',cx:prev.cx,cy:prev.cy,rx:prev.rx,ry:prev.ry,stroke:src.stroke,width:src.width}); }
+    else { pushShapeEntity({kind:(src.kind==='rect'?'rect':'polygon'),pts:prev.map(p=>({x:p.x,y:p.y})),closed:true,stroke:src.stroke,width:src.width}); }
     showHint('Offset shape created');
   } else {
     const src=state.measurements[state.offset.idx];
@@ -8539,42 +8618,77 @@ function deleteSelectedMass() {
   massHint('Deleted');
 }
 
-function enterMassing() {
-  dismissSketchOverlays();
-  releaseTransientInput();
-  state.tool = 'massing';
-  massing.active = true;
-  if (!massing.baseAnchor) massing.baseAnchor = { px: DOC_W_PX / 2, py: DOC_H_PX / 2, ppm: pxPerMetre() };
-  syncWallsToMasses();             // bring 2D walls into the 3D model
-  buildMassingBase();              // always reflect the current 2D drawing
-  massingCanvas.style.display = 'block';
-  massingBar.style.display = 'flex';
-  updateMassBaseBtn();
-  if (massing.cam.scale === 1) {
-    // first run: sensible default zoom relative to viewport
-    const r = area.getBoundingClientRect();
-    massing.cam.scale = Math.min(r.width, r.height) / 26;
+function showModeLoading(show) {
+  const el = document.getElementById('studio-mode-loading');
+  if (el) {
+    if (show) {
+      el.hidden = false;
+      el.setAttribute('aria-hidden', 'false');
+    } else {
+      el.hidden = true;
+      el.setAttribute('aria-hidden', 'true');
+    }
   }
-  massHint('Add: drag a footprint on the ground, then use Height');
-  renderMassing();
-  updateZoomDisplay();
-  highlightRailGroups();
-  syncMassToolButtons();
+  if (window.parent !== window) {
+    window.parent.postMessage({
+      type: 'sketchtrude-mode-loading',
+      loading: !!show,
+      projectId: window.__SKETCHTRUDE_PROJECT_ID,
+    }, '*');
+  }
+}
+
+function enterMassing() {
+  showModeLoading(true);
+  requestAnimationFrame(() => {
+    try {
+      dismissSketchOverlays();
+      releaseTransientInput();
+      state.tool = 'massing';
+      massing.active = true;
+      if (!massing.baseAnchor) massing.baseAnchor = { px: DOC_W_PX / 2, py: DOC_H_PX / 2, ppm: pxPerMetre() };
+      syncWallsToMasses();             // bring 2D walls into the 3D model
+      buildMassingBase();              // always reflect the current 2D drawing
+      massingCanvas.style.display = 'block';
+      massingBar.style.display = 'flex';
+      updateMassBaseBtn();
+      if (massing.cam.scale === 1) {
+        // first run: sensible default zoom relative to viewport
+        const r = area.getBoundingClientRect();
+        massing.cam.scale = Math.min(r.width, r.height) / 26;
+      }
+      massHint('Add: drag a footprint on the ground, then use Height');
+      renderMassing();
+      updateZoomDisplay();
+      highlightRailGroups();
+      syncMassToolButtons();
+    } finally {
+      requestAnimationFrame(() => showModeLoading(false));
+    }
+  });
 }
 function exitMassing() {
-  massing.active = false;
-  massing.dragging = null;
-  massing.selected = -1;
-  if (window._closeMassMenus) window._closeMassMenus();
-  if (typeof updateMatPalette === 'function') updateMatPalette();
-  if (typeof updateBuildPalette === 'function') updateBuildPalette();
-  document.getElementById('mass-inspector').style.display = 'none';
-  massingCanvas.style.display = 'none';
-  massingBar.style.display = 'none';
-  massHint('');
-  initGrainTips();
-  regroupRail();
-  setTool('pen');
+  showModeLoading(true);
+  requestAnimationFrame(() => {
+    try {
+      massing.active = false;
+      massing.dragging = null;
+      massing.selected = -1;
+      if (window._closeMassMenus) window._closeMassMenus();
+      if (typeof updateMatPalette === 'function') updateMatPalette();
+      if (typeof updateBuildPalette === 'function') updateBuildPalette();
+      document.getElementById('mass-inspector').style.display = 'none';
+      massingCanvas.style.display = 'none';
+      massingBar.style.display = 'none';
+      massHint('');
+      initGrainTips();
+      regroupRail();
+      setTool('pen');
+      fitToScreen();
+    } finally {
+      requestAnimationFrame(() => showModeLoading(false));
+    }
+  });
 }
 
 // ---- flatten current masses onto a new 2D layer, ALIGNED to the plan ----
@@ -9239,9 +9353,39 @@ document.getElementById('btn-fullscreen').addEventListener('click', () => {
   const isFS = document.body.classList.toggle('nm-fullscreen');
   document.getElementById('btn-fullscreen').classList.toggle('active', isFS);
   document.getElementById('fs-exit').style.display = isFS ? 'block' : 'none';
-  setTimeout(() => { fitToScreen(); }, 50);
+  const refit = () => {
+    fitToScreen();
+    if (typeof massing !== 'undefined' && massing.active && typeof renderMassing === 'function') {
+      renderMassing();
+    }
+  };
+  requestAnimationFrame(() => {
+    requestAnimationFrame(refit);
+  });
+  setTimeout(refit, 50);
+  setTimeout(refit, 100);
+  setTimeout(refit, 200);
   showHint(isFS ? 'Full-screen mode · Esc or click ⤡ to exit' : 'Exited full-screen');
 });
+
+// Keep canvas fitted when the viewport / canvas-area size changes
+(function bindCanvasAreaResize() {
+  let resizeTimer = null;
+  const onResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      fitToScreen();
+      if (typeof massing !== 'undefined' && massing.active && typeof renderMassing === 'function') {
+        renderMassing();
+      }
+    }, 50);
+  };
+  if (typeof ResizeObserver !== 'undefined' && area) {
+    const ro = new ResizeObserver(onResize);
+    ro.observe(area);
+  }
+  window.addEventListener('resize', onResize);
+})();
 
 document.getElementById('fs-exit').addEventListener('click', () => {
   document.getElementById('btn-fullscreen').click();
@@ -9343,6 +9487,53 @@ function autosaveKey() {
   return (typeof window !== 'undefined' && window.__SKETCHTRUDE_PROJECT_ID) || 'current';
 }
 let _autosaveTimer = null, _autosaveBusy = false, _autosaveSuspended = false, _autosaveSerial = 0;
+let _isHydrating = false;
+let _mutationVersion = 0;
+let _hasUnsavedChanges = false;
+const _documentChangeListeners = new Set();
+
+function makeMutationId() {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  } catch (_) { /* ignore */ }
+  return 'm-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
+}
+
+function notifyDocumentChanged() {
+  if (_isHydrating || _autosaveSuspended) return;
+  _mutationVersion++;
+  _hasUnsavedChanges = true;
+  const event = {
+    mutationId: makeMutationId(),
+    mutationVersion: _mutationVersion,
+    type: 'bulk-update',
+    timestamp: Date.now(),
+  };
+  for (const cb of _documentChangeListeners) {
+    try { cb(event); } catch (_) { /* listener errors must not break drawing */ }
+  }
+  if (window.parent !== window) {
+    window.parent.postMessage({ type: 'sketchtrude-document-changed', event }, '*');
+  }
+}
+
+function postContentReady() {
+  if (window.parent !== window) {
+    window.parent.postMessage({
+      type: 'sketchtrude-content-ready',
+      projectId: window.__SKETCHTRUDE_PROJECT_ID,
+    }, '*');
+  }
+}
+
+function postEngineReady() {
+  if (window.parent !== window) {
+    window.parent.postMessage({
+      type: 'sketchtrude-engine-ready',
+      projectId: window.__SKETCHTRUDE_PROJECT_ID,
+    }, '*');
+  }
+}
 let _autosaveWaiters = [];
 let _idbPromise = null;
 
@@ -9390,12 +9581,15 @@ function idb() {
 let _massSaveTimer = null;
 function scheduleMassAutosave() {
   if (_autosaveSuspended) return;
+  notifyDocumentChanged();
   clearTimeout(_massSaveTimer);
   _massSaveTimer = setTimeout(() => { if (!state.drawing) saveDoc(); }, 1500);
 }
 
-function scheduleAutosave() {
+function scheduleAutosave(opts) {
   if (_autosaveSuspended) return;
+  const fromReschedule = opts && opts.fromReschedule;
+  if (!fromReschedule) notifyDocumentChanged();
   _autosaveSerial++;
   clearTimeout(_autosaveTimer);
   scheduleThumbnail();
@@ -9404,7 +9598,7 @@ function scheduleAutosave() {
   // runs after a real pause. visibilitychange/pagehide + the periodic timer below
   // cover crash safety during long continuous sessions.
   _autosaveTimer = setTimeout(() => {
-    if (state.drawing) { scheduleAutosave(); return; }
+    if (state.drawing) { scheduleAutosave({ fromReschedule: true }); return; }
     if (window.requestIdleCallback) requestIdleCallback(() => saveDoc(), { timeout: 4000 });
     else saveDoc();
   }, 750);
@@ -9433,7 +9627,7 @@ function massesForSave() {
 async function saveDoc() {
   if (_autosaveBusy) return waitForAutosave();
   if (_autosaveSuspended || !state.layers.length) return;
-  if (state.drawing) { scheduleAutosave(); return; }   // defer until not drawing
+  if (state.drawing) { scheduleAutosave({ fromReschedule: true }); return; }   // defer until not drawing
   _autosaveBusy = true;
   const saveSerial = _autosaveSerial;
   try {
@@ -9489,13 +9683,13 @@ async function saveDoc() {
       });
     }
     _lastDocPayload = payload;
-    scheduleCloudSync();
+    // Cloud sync is owned by the parent ProjectSaveController — do not scheduleCloudSync here.
   } catch (e) {
     console.warn('Autosave failed:', e);
   } finally {
     _autosaveBusy = false;
     notifyAutosaveWaiters();
-    if (_autosaveSerial !== saveSerial && !state.drawing) scheduleAutosave();
+    if (_autosaveSerial !== saveSerial && !state.drawing) scheduleAutosave({ fromReschedule: true });
   }
 }
 
@@ -9514,9 +9708,7 @@ function notifyCloudSyncWaiters() {
 }
 
 function scheduleCloudSync() {
-  if (!_lastDocPayload) return;
-  clearTimeout(_cloudSyncTimer);
-  _cloudSyncTimer = setTimeout(() => { flushCloudSync(); }, 2500);
+  // no-op: parent ProjectSaveController owns cloud saves now
 }
 
 async function uploadLayerRaster(pid, index, blob) {
@@ -9694,7 +9886,137 @@ function removeAllLayers() {
   state.layers = [];
 }
 
-// Returns true if a session was restored.
+async function resolveLayerBlob(ld) {
+  if (ld && ld.blob && ld.blob.size > 0) return ld.blob;
+  const url = ld && (ld.raster_url || ld.rasterUrl);
+  if (url) {
+    try {
+      const imgRes = await fetch(url);
+      if (imgRes.ok) return await imgRes.blob();
+    } catch (_) { /* skip layer image */ }
+  }
+  return null;
+}
+
+/** If imported layers lack pixels, merge blobs from the engine's local IDB autosave. */
+async function mergeLocalLayerBlobs(saved) {
+  if (!saved?.layers?.length) return saved;
+  const needsPixels = saved.layers.some((l) => !(l.blob && l.blob.size > 0) && !(l.raster_url || l.rasterUrl));
+  if (!needsPixels) return saved;
+  try {
+    const local = await loadSavedDoc();
+    if (!local?.layers?.length) return saved;
+    const layers = saved.layers.map((layer, i) => {
+      if (layer.blob && layer.blob.size > 0) return layer;
+      if (layer.raster_url || layer.rasterUrl) return layer;
+      const fromLocal = local.layers[i];
+      if (fromLocal?.blob && fromLocal.blob.size > 0) {
+        return { ...layer, blob: fromLocal.blob };
+      }
+      return layer;
+    });
+    // Prefer local vector data when the imported doc looks empty (broken prior cloud save)
+    const importedEmpty =
+      !(saved.walls?.length || saved.shapes?.length || saved.masses?.length || saved.measurements?.length);
+    const merged = { ...saved, layers };
+    if (importedEmpty && local) {
+      if (Array.isArray(local.walls)) merged.walls = local.walls;
+      if (Array.isArray(local.shapes)) merged.shapes = local.shapes;
+      if (Array.isArray(local.masses)) merged.masses = local.masses;
+      if (Array.isArray(local.measurements)) merged.measurements = local.measurements;
+      if (local.massBaseAnchor) merged.massBaseAnchor = local.massBaseAnchor;
+      if (local.pxPerUnit) {
+        merged.pxPerUnit = local.pxPerUnit;
+        merged.scaleUnit = local.scaleUnit;
+        merged.scaleLabel = local.scaleLabel;
+      }
+      if (local.doc?.wmm) merged.doc = local.doc;
+    }
+    return merged;
+  } catch (_) {
+    return saved;
+  }
+}
+
+/** Apply a LegacyStudioDocument into live engine state. Caller manages hydration flags. */
+async function applyLegacyDocument(saved) {
+  if (!saved || typeof saved !== 'object') {
+    throw new Error('Document has no layers');
+  }
+  // Tolerate missing doc block from older/broken saves
+  const wmm = saved.doc?.wmm || DOC_W_MM;
+  const hmm = saved.doc?.hmm || DOC_H_MM;
+  const dpi = saved.doc?.dpi || DOC_DPI;
+  if (!saved.layers || !saved.layers.length) {
+    throw new Error('Document has no layers');
+  }
+  // Apply document dimensions
+  DOC_W_MM = wmm; DOC_H_MM = hmm; DOC_DPI = dpi;
+  DOC_W_PX = Math.round(DOC_W_MM / 25.4 * DOC_DPI);
+  DOC_H_PX = Math.round(DOC_H_MM / 25.4 * DOC_DPI);
+  strokeCanvas.width = DOC_W_PX; strokeCanvas.height = DOC_H_PX;
+  const gc = document.getElementById('guide-canvas'); if (gc) { gc.width = DOC_W_PX; gc.height = DOC_H_PX; }
+  gridCanvas.width = DOC_W_PX; gridCanvas.height = DOC_H_PX;
+  if (paper) {
+    paper.style.width = DOC_W_PX + 'px';
+    paper.style.height = DOC_H_PX + 'px';
+  }
+
+  removeAllLayers();
+  for (const ld of saved.layers) {
+    const layer = createLayer(ld.name);   // pushes + creates canvases at current DOC size
+    layer.visible = ld.visible; layer.opacity = ld.opacity;
+    layer.trace = ld.trace || 0; layer.blendMode = ld.blendMode || 'source-over';
+    if (ld.raster_path) layer._rasterPath = ld.raster_path;
+    const blob = await resolveLayerBlob(ld);
+    if (blob) {
+      try {
+        const bmp = await createImageBitmap(blob);
+        layer.ctx.drawImage(bmp, 0, 0);
+        bmp.close && bmp.close();
+        layer._savedBlob = blob;
+      } catch (_) { /* skip a corrupt layer image */ }
+    }
+    // reset history to this restored state
+    layer.history = []; layer.redo = [];
+    saveSnapshot(layer);
+  }
+  state.activeLayer = Math.min(saved.activeLayer ?? state.layers.length - 1, state.layers.length - 1);
+  if (saved.pxPerUnit) {
+    state.pxPerUnit = saved.pxPerUnit;
+    state.scaleUnit = saved.scaleUnit || 'cm';
+  } else if (saved.scaleLabel) {
+    state.pxPerUnit = null;
+    applyScaleFromLabel(saved.scaleLabel);
+  } else {
+    state.pxPerUnit = null;
+  }
+  updateScaleDisplay();
+  if (saved.infiniteCanvas != null) state.infiniteCanvas = !!saved.infiniteCanvas;
+  state.autoExpandCanvas = false;
+  if (saved.paperBg) { state.paperBg = saved.paperBg; if (paper) paper.style.background = saved.paperBg; }
+  if (saved.grid) {
+    state.showGrid = !!saved.grid.show;
+    state.gridType = saved.grid.type || state.gridType;
+    if (saved.grid.spacingMM) state.gridSpacingMM = saved.grid.spacingMM;
+    drawDocGrid();
+  }
+  if (Array.isArray(saved.measurements)) state.measurements = saved.measurements;
+  if (Array.isArray(saved.walls)) state.walls = saved.walls;
+  state.wallsVisible = saved.wallsVisible != null ? !!saved.wallsVisible : true;
+  if (Array.isArray(saved.shapes)) {
+    state.shapes = saved.shapes;
+    ensureAllShapeIds(state.shapes);
+  }
+  if (Array.isArray(saved.masses)) { massing.masses = saved.masses; massing.selected = -1; }
+  if (saved.massBaseAnchor) massing.baseAnchor = saved.massBaseAnchor;
+  if (typeof syncWallsToMasses === 'function') syncWallsToMasses();
+  fitToScreen();
+  updateLayerOrder(); renderLayers(); updateUI();
+  refreshMeasurements(); renderSchedule();
+}
+
+// Returns true if a session was restored. Not called on boot — parent drives import/start-fresh.
 async function restoreSession() {
   let cloudSaved = null, localSaved = null;
   try { localSaved = await loadSavedDoc(); } catch { localSaved = null; }
@@ -9702,85 +10024,112 @@ async function restoreSession() {
   const saved = chooseSavedDoc(localSaved, cloudSaved);
   if (!saved || !saved.layers || !saved.layers.length) return false;
   _autosaveSuspended = true;
+  _isHydrating = true;
   try {
-    // Apply document dimensions
-    DOC_W_MM = saved.doc.wmm; DOC_H_MM = saved.doc.hmm; DOC_DPI = saved.doc.dpi;
-    DOC_W_PX = Math.round(DOC_W_MM / 25.4 * DOC_DPI);
-    DOC_H_PX = Math.round(DOC_H_MM / 25.4 * DOC_DPI);
-    strokeCanvas.width = DOC_W_PX; strokeCanvas.height = DOC_H_PX;
-    const gc = document.getElementById('guide-canvas'); gc.width = DOC_W_PX; gc.height = DOC_H_PX;
-    gridCanvas.width = DOC_W_PX; gridCanvas.height = DOC_H_PX;
-
-    removeAllLayers();
-    for (const ld of saved.layers) {
-      const layer = createLayer(ld.name);   // pushes + creates canvases at current DOC size
-      layer.visible = ld.visible; layer.opacity = ld.opacity;
-      layer.trace = ld.trace || 0; layer.blendMode = ld.blendMode || 'source-over';
-      if (ld.blob) {
-        try {
-          const bmp = await createImageBitmap(ld.blob);
-          layer.ctx.drawImage(bmp, 0, 0);
-          bmp.close && bmp.close();
-        } catch (_) { /* skip a corrupt layer image */ }
-      }
-      // reset history to this restored state
-      layer.history = []; layer.redo = [];
-      saveSnapshot(layer);
-    }
-    state.activeLayer = Math.min(saved.activeLayer ?? state.layers.length - 1, state.layers.length - 1);
-    if (saved.pxPerUnit) { state.pxPerUnit = saved.pxPerUnit; state.scaleUnit = saved.scaleUnit || 'cm'; }
-    else if (saved.scaleLabel) applyScaleFromLabel(saved.scaleLabel);
-    updateScaleDisplay();
-    if (saved.infiniteCanvas != null) state.infiniteCanvas = !!saved.infiniteCanvas;
-    if (saved.autoExpandCanvas != null) state.autoExpandCanvas = !!saved.autoExpandCanvas;
-    if (saved.paperBg) { state.paperBg = saved.paperBg; if (paper) paper.style.background = saved.paperBg; }
-    if (saved.grid) {
-      state.showGrid = !!saved.grid.show;
-      state.gridType = saved.grid.type || state.gridType;
-      if (saved.grid.spacingMM) state.gridSpacingMM = saved.grid.spacingMM;
-      drawDocGrid();
-    }
-    if (Array.isArray(saved.measurements)) state.measurements = saved.measurements;
-    if (Array.isArray(saved.walls)) state.walls = saved.walls;
-    state.wallsVisible = saved.wallsVisible != null ? !!saved.wallsVisible : true;
-    if (Array.isArray(saved.shapes)) state.shapes = saved.shapes;
-    if (Array.isArray(saved.masses)) { massing.masses = saved.masses; massing.selected = -1; }
-    if (saved.massBaseAnchor) massing.baseAnchor = saved.massBaseAnchor;
-    if (typeof syncWallsToMasses === 'function') syncWallsToMasses();
-    fitToScreen();
-    updateLayerOrder(); renderLayers(); updateUI();
-    refreshMeasurements(); renderSchedule();
+    await applyLegacyDocument(saved);
+    _hasUnsavedChanges = false;
     return true;
   } catch (e) {
     console.warn('Restore failed, starting fresh:', e);
     return false;
   } finally {
+    _isHydrating = false;
     _autosaveSuspended = false;
   }
 }
 
-// Save on page hide/close as a final safety net (debounce may not have fired)
+async function importProjectDocument(document) {
+  if (!document || typeof document !== 'object') {
+    throw new Error('Invalid document');
+  }
+  _autosaveSuspended = true;
+  _isHydrating = true;
+  try {
+    const merged = await mergeLocalLayerBlobs(document);
+    await applyLegacyDocument(merged);
+    _hasUnsavedChanges = false;
+  } finally {
+    _isHydrating = false;
+    _autosaveSuspended = false;
+  }
+  postContentReady();
+  setTimeout(() => postContentReady(), 80);
+}
+
+async function exportProjectDocument() {
+  // Ensure layer blobs are fresh, then return the same payload shape as saveDoc.
+  await saveDoc();
+  return _lastDocPayload;
+}
+
+function subscribeToDocumentChanges(callback) {
+  if (typeof callback !== 'function') return () => {};
+  _documentChangeListeners.add(callback);
+  return () => { _documentChangeListeners.delete(callback); };
+}
+
+function hasUnsavedChanges() {
+  return !!_hasUnsavedChanges;
+}
+
+function getMutationVersion() {
+  return _mutationVersion;
+}
+
+function applyScaleBlank() {
+  state.pxPerUnit = null;
+  updateScaleDisplay();
+}
+
+function handleStartFresh() {
+  _isHydrating = true;
+  try {
+    // Keep default layers created at boot; do not apply cfg.scale_label.
+    applyScaleBlank();
+    state.autoExpandCanvas = false;
+    fitToScreen();
+  } finally {
+    _isHydrating = false;
+    _hasUnsavedChanges = false;
+  }
+  postContentReady();
+  // Short timeout so parent can hide loading after paint.
+  setTimeout(() => postContentReady(), 80);
+}
+
+window.sketchtrudeEngine = {
+  exportProjectDocument,
+  importProjectDocument,
+  subscribeToDocumentChanges,
+  hasUnsavedChanges,
+  getMutationVersion,
+};
+
+// Save on page hide/close as a final safety net (debounce may not have fired).
+// Local IDB only — parent owns cloud sync.
 window.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
-    saveDoc().then(() => flushCloudSync());
+    saveDoc();
     scheduleThumbnail();
   }
 });
 window.addEventListener('pagehide', () => {
-  saveDoc().then(() => flushCloudSync());
+  saveDoc();
   scheduleThumbnail();
 });
 
 window.addEventListener('message', async (e) => {
-  if (e.data?.type === 'sketchtrude-save') {
+  const data = e.data;
+  if (!data || typeof data !== 'object') return;
+  const type = data.type;
+
+  if (type === 'sketchtrude-save') {
     try {
       for (let i = 0; i < 30; i++) {
         await saveDoc();
         if (_lastDocPayload && !_autosaveBusy && !state.layers.some(l => l._dirty)) break;
         await new Promise((r) => setTimeout(r, 100));
       }
-      clearTimeout(_cloudSyncTimer);
-      await flushCloudSync();
       scheduleThumbnail();
     } catch (_) {}
     if (window.parent !== window) {
@@ -9788,6 +10137,92 @@ window.addEventListener('message', async (e) => {
         type: 'sketchtrude-save-done',
         projectId: window.__SKETCHTRUDE_PROJECT_ID,
       }, '*');
+    }
+    return;
+  }
+
+  if (type === 'sketchtrude-start-fresh') {
+    handleStartFresh();
+    return;
+  }
+
+  if (type === 'sketchtrude-ping-ready') {
+    postEngineReady();
+    return;
+  }
+
+  if (type === 'sketchtrude-import-document') {
+    try {
+      await importProjectDocument(data.document);
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'sketchtrude-import-document-result', ok: true }, '*');
+      }
+      postContentReady();
+    } catch (err) {
+      const message = (err && err.message) ? err.message : String(err);
+      console.warn('Import failed:', err);
+      // Fall back to local IDB session before reporting failure
+      try {
+        const restored = await restoreSession();
+        if (restored) {
+          if (window.parent !== window) {
+            window.parent.postMessage({ type: 'sketchtrude-import-document-result', ok: true, recovered: true }, '*');
+          }
+          postContentReady();
+          return;
+        }
+      } catch (_) { /* ignore */ }
+      if (window.parent !== window) {
+        window.parent.postMessage({
+          type: 'sketchtrude-import-document-result',
+          ok: false,
+          error: message,
+        }, '*');
+      }
+    }
+    return;
+  }
+
+  if (type === 'sketchtrude-restore-local') {
+    try {
+      const restored = await restoreSession();
+      if (window.parent !== window) {
+        window.parent.postMessage({
+          type: 'sketchtrude-restore-local-result',
+          ok: !!restored,
+        }, '*');
+      }
+      if (restored) postContentReady();
+    } catch (err) {
+      if (window.parent !== window) {
+        window.parent.postMessage({
+          type: 'sketchtrude-restore-local-result',
+          ok: false,
+          error: (err && err.message) ? err.message : String(err),
+        }, '*');
+      }
+    }
+    return;
+  }
+
+  if (type === 'sketchtrude-export-document') {
+    try {
+      const document = await exportProjectDocument();
+      if (window.parent !== window) {
+        window.parent.postMessage({
+          type: 'sketchtrude-export-document-result',
+          document,
+        }, '*');
+      }
+    } catch (err) {
+      const message = (err && err.message) ? err.message : String(err);
+      if (window.parent !== window) {
+        window.parent.postMessage({
+          type: 'sketchtrude-export-document-result',
+          document: null,
+          error: message,
+        }, '*');
+      }
     }
   }
 });
@@ -9824,7 +10259,7 @@ function scaleLabelFromState() {
 function updateScaleDisplay() {
   const label = scaleLabelFromState();
   const el = document.getElementById('scale-text');
-  if (el && label) el.textContent = label.replace(/\s+/g, '');
+  if (el) el.textContent = label ? label.replace(/\s+/g, '') : '—';
   return label;
 }
 
@@ -9844,43 +10279,41 @@ function applyProjectConfig() {
   const cfg = typeof window !== 'undefined' ? window.__SKETCHTRUDE_PROJECT_CONFIG : null;
   if (!cfg) return;
   const meta = cfg.metadata || {};
-  if (cfg.doc_width_mm > 0 && cfg.doc_height_mm > 0) {
+  const isInfinite = !!(meta.infinite_canvas || cfg.infinite_canvas);
+  // Never auto-expand; infinite = large fixed world.
+  state.autoExpandCanvas = false;
+  state.infiniteCanvas = isInfinite;
+
+  if (cfg.doc_dpi > 0) DOC_DPI = cfg.doc_dpi;
+
+  if (isInfinite) {
+    // Large fixed canvas so drawing is not clipped quickly (~1600mm square at project dpi).
+    DOC_W_MM = 1600;
+    DOC_H_MM = 1600;
+  } else if (cfg.doc_width_mm > 0 && cfg.doc_height_mm > 0) {
     DOC_W_MM = cfg.doc_width_mm;
     DOC_H_MM = cfg.doc_height_mm;
-    DOC_DPI = cfg.doc_dpi || DOC_DPI;
-    DOC_W_PX = Math.round(DOC_W_MM / 25.4 * DOC_DPI);
-    DOC_H_PX = Math.round(DOC_H_MM / 25.4 * DOC_DPI);
-    if (paper) {
-      paper.style.width = DOC_W_PX + 'px';
-      paper.style.height = DOC_H_PX + 'px';
-      if (state.paperBg) paper.style.background = state.paperBg;
-    }
-    if (typeof strokeCanvas !== 'undefined' && strokeCanvas) {
-      strokeCanvas.width = DOC_W_PX;
-      strokeCanvas.height = DOC_H_PX;
-    }
-    const gc = document.getElementById('guide-canvas');
-    if (gc) { gc.width = DOC_W_PX; gc.height = DOC_H_PX; }
-    if (typeof gridCanvas !== 'undefined' && gridCanvas) {
-      gridCanvas.width = DOC_W_PX;
-      gridCanvas.height = DOC_H_PX;
-    }
-    updateDocInfo(paperFormatName(DOC_W_MM, DOC_H_MM));
   }
-  if (meta.infinite_canvas || cfg.infinite_canvas) state.infiniteCanvas = true;
-  state.autoExpandCanvas = !!(
-    meta.auto_expand ||
-    meta.infinite_canvas ||
-    cfg.infinite_canvas
-  );
-  // Older projects created before auto_expand metadata — expand by default
-  if (
-    meta.auto_expand === undefined &&
-    meta.infinite_canvas === undefined &&
-    !cfg.infinite_canvas
-  ) {
-    state.autoExpandCanvas = true;
+
+  DOC_W_PX = Math.round(DOC_W_MM / 25.4 * DOC_DPI);
+  DOC_H_PX = Math.round(DOC_H_MM / 25.4 * DOC_DPI);
+  if (paper) {
+    paper.style.width = DOC_W_PX + 'px';
+    paper.style.height = DOC_H_PX + 'px';
+    if (state.paperBg) paper.style.background = state.paperBg;
   }
+  if (typeof strokeCanvas !== 'undefined' && strokeCanvas) {
+    strokeCanvas.width = DOC_W_PX;
+    strokeCanvas.height = DOC_H_PX;
+  }
+  const gc = document.getElementById('guide-canvas');
+  if (gc) { gc.width = DOC_W_PX; gc.height = DOC_H_PX; }
+  if (typeof gridCanvas !== 'undefined' && gridCanvas) {
+    gridCanvas.width = DOC_W_PX;
+    gridCanvas.height = DOC_H_PX;
+  }
+  updateDocInfo(paperFormatName(DOC_W_MM, DOC_H_MM));
+
   const bg = meta.paper_bg;
   if (bg) {
     state.paperBg = bg;
@@ -9938,18 +10371,9 @@ if (state.guideType && state.guideType !== 'none' && typeof drawGuideGrid === 'f
 const ovfSym = document.getElementById('ovf-symmetry');
 if (ovfSym) ovfSym.addEventListener('click', () => { toggleSymmetry(); overflowPanel.classList.remove('show'); });
 
-// Attempt to restore the last session (replaces the default layers if found).
-restoreSession().then(restored => {
-  if (restored) {
-    const label = scaleLabelFromState();
-    if (label) syncProjectScale(label);
-    scheduleThumbnail();
-    setTimeout(() => showHint('Restored your last session'), 400);
-  } else {
-    const cfg = typeof window !== 'undefined' ? window.__SKETCHTRUDE_PROJECT_CONFIG : null;
-    if (cfg?.scale_label) applyScaleFromLabel(cfg.scale_label);
-  }
-});
+// Do NOT restoreSession() on boot — parent drives import / start-fresh after ready.
+updateScaleDisplay();
+postEngineReady();
 
 setTimeout(() => {
   showHint('SketchTrude · 2-finger tap = undo · 3-finger tap = redo · UI hides while drawing');

@@ -67,16 +67,13 @@
     return massingActive ? "massing" : tool;
   }
 
-  function resolveAutoExpandFromMetadata(meta) {
-    return !!(
-      meta.infinite_canvas ||
-      meta.auto_expand ||
-      meta.show_grid
-    );
+  function resolveAutoExpandFromMetadata(_meta) {
+    // Phase 1: never auto-expand; infinite is a large fixed world.
+    return false;
   }
 
-  function shouldAutoExpandCanvas(flags) {
-    return !!(flags.infiniteCanvas || flags.autoExpandCanvas);
+  function shouldAutoExpandCanvas(_flags) {
+    return false;
   }
 
   function shouldExpandAtEdge(x, y, docWidth, docHeight, threshold) {

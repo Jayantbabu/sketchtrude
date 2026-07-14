@@ -39,6 +39,11 @@
       helpers.async = false;
       document.body.appendChild(helpers);
 
+      const interaction = document.createElement('script');
+      interaction.src = '/engine/interaction-core.js';
+      interaction.async = false;
+      document.body.appendChild(interaction);
+
       const script = document.createElement('script');
       script.src = '/engine/legacy-app.js';
       script.async = false;

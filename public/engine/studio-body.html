@@ -43,7 +43,7 @@
 
     <div class="topbar-divider"></div>
 
-    <div class="scale-readout">SCALE <strong id="scale-text">1:50</strong></div>
+    <div class="scale-readout">SCALE <strong id="scale-text">—</strong></div>
 
     <!-- Export -->
     <button class="btn-export-cta" id="btn-export">
@@ -218,6 +218,9 @@
 
   <!-- CANVAS AREA -->
   <div class="canvas-area" id="canvas-area">
+    <div id="studio-mode-loading" class="studio-mode-loading" aria-hidden="true" hidden>
+      <span>Loading…</span>
+    </div>
     <div class="canvas-stage" id="canvas-stage">
       <div class="paper" id="paper">
         <img class="bg-image" id="bg-image" style="display:none;">
