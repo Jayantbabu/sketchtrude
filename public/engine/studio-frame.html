@@ -34,20 +34,15 @@
       const logo = document.getElementById('logo');
       if (logo) logo.src = '/logo.png';
 
-      const helpers = document.createElement('script');
-      helpers.src = '/engine/studio-helpers.js';
-      helpers.async = false;
-      document.body.appendChild(helpers);
-
-      const interaction = document.createElement('script');
-      interaction.src = '/engine/interaction-core.js';
-      interaction.async = false;
-      document.body.appendChild(interaction);
-
-      const script = document.createElement('script');
-      script.src = '/engine/legacy-app.js';
-      script.async = false;
-      document.body.appendChild(script);
+      // Single bundled engine (built from src/engine/app via esbuild)
+      await new Promise((resolve, reject) => {
+        const el = document.createElement('script');
+        el.src = '/engine/studio.js';
+        el.async = false;
+        el.onload = () => resolve();
+        el.onerror = () => reject(new Error('Failed to load /engine/studio.js'));
+        document.body.appendChild(el);
+      });
     })().catch((err) => {
       const mount = document.getElementById('studio-mount');
       if (mount) {

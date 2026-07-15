@@ -75,6 +75,7 @@ export const projectDocumentSchema = z.object({
   }),
   scene: z.object({
     rootLayerIds: z.array(z.string()),
+    rootFloorIds: z.array(z.string()).optional(),
     layers: z.record(z.string(), projectLayerSchema),
     objects: z.record(z.string(), projectObjectSchema),
   }),

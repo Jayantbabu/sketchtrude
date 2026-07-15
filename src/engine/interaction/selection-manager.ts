@@ -110,11 +110,44 @@ export class SelectionManager {
   }
 
   setEditingPath(objectId: string | null): void {
-    this.state = { ...this.state, editingPathId: objectId };
+    this.state = {
+      ...this.state,
+      editingPathId: objectId,
+      activeEditContextId: objectId,
+    };
+  }
+
+  setActiveEditContext(objectId: string | null): void {
+    this.state = {
+      ...this.state,
+      activeEditContextId: objectId,
+      editingPathId: objectId,
+    };
+  }
+
+  setSelectedSubElement(subElementId: string | null): void {
+    this.state = { ...this.state, selectedSubElementId: subElementId };
   }
 
   setFocusedLayer(layerId: string | null): void {
     this.state = { ...this.state, focusedLayerId: layerId };
+  }
+
+  /**
+   * Escape: exit edit context first, then clear selection.
+   * Returns true when something changed.
+   */
+  handleEscape(source: SelectionSource = "keyboard"): boolean {
+    if (this.state.activeEditContextId || this.state.editingPathId) {
+      this.setActiveEditContext(null);
+      this.setSelectedSubElement(null);
+      return true;
+    }
+    if (this.state.selectedIds.length > 0) {
+      this.clear(source);
+      return true;
+    }
+    return false;
   }
 
   isSelected(objectId: string): boolean {

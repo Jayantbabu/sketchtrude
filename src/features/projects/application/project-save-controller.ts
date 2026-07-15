@@ -132,21 +132,23 @@ export async function prepareDocumentForPersistence(
     const hasPath =
       typeof layer.raster_path === "string" && layer.raster_path.length > 0;
 
-    if (!hasPath && uploadLayerRaster) {
-      let blob: Blob | null = null;
-      if (typeof Blob !== "undefined" && layer.blob instanceof Blob) {
-        blob = layer.blob;
-      } else if (typeof Blob !== "undefined" && layer.raster instanceof Blob) {
-        blob = layer.raster;
-      } else if (isDataUrl(layer.raster)) {
-        blob = await dataUrlToBlob(layer.raster);
-      } else if (isDataUrl(layer.blob)) {
-        blob = await dataUrlToBlob(layer.blob);
-      }
+    // Always re-upload when the engine provides a fresh blob. Skipping when
+    // raster_path already exists left clears/erases pointing at stale PNGs.
+    let blob: Blob | null = null;
+    if (typeof Blob !== "undefined" && layer.blob instanceof Blob) {
+      blob = layer.blob;
+    } else if (typeof Blob !== "undefined" && layer.raster instanceof Blob) {
+      blob = layer.raster;
+    } else if (isDataUrl(layer.raster)) {
+      blob = await dataUrlToBlob(layer.raster);
+    } else if (isDataUrl(layer.blob)) {
+      blob = await dataUrlToBlob(layer.blob);
+    }
 
-      if (blob && blob.size > 0) {
-        layer.raster_path = await uploadLayerRaster(projectId, i, blob);
-      }
+    if (uploadLayerRaster && blob && blob.size > 0) {
+      layer.raster_path = await uploadLayerRaster(projectId, i, blob);
+    } else if (!hasPath && blob && blob.size > 0) {
+      // Offline / no uploader: keep blob for local recovery only.
     }
 
     layers.push(layer);

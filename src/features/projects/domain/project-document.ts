@@ -50,6 +50,19 @@ export type DrawingAssistSettings = {
   pressureSensitivity?: boolean;
 };
 
+/**
+ * Layer kind in the hybrid scene graph.
+ * sketch = fluid stroke container; object/architecture = selectable children;
+ * reference/measurement/guide = specialized rows.
+ */
+export type ProjectLayerKind =
+  | "sketch"
+  | "object"
+  | "architecture"
+  | "reference"
+  | "measurement"
+  | "guide";
+
 export type ProjectLayer = {
   id: string;
   name: string;
@@ -57,7 +70,11 @@ export type ProjectLayer = {
   locked: boolean;
   opacity: number;
   order: number;
+  /** Hybrid layer kind — defaults to sketch when absent (legacy docs). */
+  kind?: ProjectLayerKind;
   parentId?: string | null;
+  /** Floor / artboard this layer belongs to. */
+  floorId?: string | null;
   blendMode?: string;
   trace?: number;
   /** Cloud storage path for raster PNG (JSON-safe). */
@@ -195,7 +212,10 @@ export type ProjectDocument = {
   metadata: ProjectDocumentMetadata;
   canvas: ProjectDocumentCanvas;
   scene: {
+    /** Ordered root layer ids (typically under the active floor). */
     rootLayerIds: string[];
+    /** Ordered floor / artboard ids when using the hybrid layer engine. */
+    rootFloorIds?: string[];
     layers: Record<string, ProjectLayer>;
     objects: Record<string, ProjectObject>;
   };
@@ -288,14 +308,21 @@ export function createEmptyProjectDocument(
 
   const layer: ProjectLayer = {
     id: layerId,
-    name: "Layer 1",
+    name: "Sketch 01",
     visible: true,
     locked: false,
     opacity: 1,
     order: 0,
+    kind: "sketch",
+    floorId: "floor_default",
     blendMode: "source-over",
     trace: 0,
     rasterPath: null,
+    metadata: {
+      layerKind: "sketch",
+      floorId: "floor_default",
+      expanded: false,
+    },
   };
 
   const paperBg = meta.paperBg ?? "#ffffff";
@@ -320,6 +347,7 @@ export function createEmptyProjectDocument(
     },
     scene: {
       rootLayerIds: [layerId],
+      rootFloorIds: ["floor_default"],
       layers: { [layerId]: layer },
       objects: {},
     },
@@ -330,13 +358,20 @@ export function createEmptyProjectDocument(
     },
     views: {
       activeMode: "2d",
-      twoD: { zoom: 1, panX: 0, panY: 0, rotation: 0 },
+      twoD: {
+        zoom: 1,
+        panX: 0,
+        panY: 0,
+        rotation: 0,
+        activeFloorId: "floor_default",
+      },
       threeD: {
         cameraPosition: { x: 0, y: 0, z: 10 },
         cameraTarget: { x: 0, y: 0, z: 0 },
         cameraUp: { x: 0, y: 1, z: 0 },
         projection: "perspective",
         fieldOfView: 50,
+        activeFloorId: "floor_default",
       },
     },
     settings: {
@@ -375,7 +410,7 @@ export function createEmptyProjectDocument(
     masses: [],
     layers: [
       {
-        name: "Layer 1",
+        name: "Sketch 01",
         visible: true,
         opacity: 1,
         trace: 0,
@@ -462,10 +497,17 @@ export function projectDocumentFromLegacyStudio(
       locked: false,
       opacity: typeof layer.opacity === "number" ? layer.opacity : 1,
       order: index,
+      kind: "sketch",
+      floorId: "floor_default",
       blendMode:
         typeof layer.blendMode === "string" ? layer.blendMode : "source-over",
       trace: typeof layer.trace === "number" ? layer.trace : 0,
       rasterPath: layer.raster_path ?? null,
+      metadata: {
+        layerKind: "sketch",
+        floorId: "floor_default",
+        expanded: false,
+      },
     };
   });
 
@@ -474,14 +516,21 @@ export function projectDocumentFromLegacyStudio(
     rootLayerIds.push(id);
     layers[id] = {
       id,
-      name: "Layer 1",
+      name: "Sketch 01",
       visible: true,
       locked: false,
       opacity: 1,
       order: 0,
+      kind: "sketch",
+      floorId: "floor_default",
       blendMode: "source-over",
       trace: 0,
       rasterPath: null,
+      metadata: {
+        layerKind: "sketch",
+        floorId: "floor_default",
+        expanded: false,
+      },
     };
   }
 
@@ -530,6 +579,7 @@ export function projectDocumentFromLegacyStudio(
     },
     scene: {
       rootLayerIds,
+      rootFloorIds: ["floor_default"],
       layers,
       objects: {},
     },
@@ -540,13 +590,14 @@ export function projectDocumentFromLegacyStudio(
     },
     views: {
       activeMode: "2d",
-      twoD: { zoom: 1, panX: 0, panY: 0, rotation: 0 },
+      twoD: { zoom: 1, panX: 0, panY: 0, rotation: 0, activeFloorId: "floor_default" },
       threeD: {
         cameraPosition: { x: 0, y: 0, z: 10 },
         cameraTarget: { x: 0, y: 0, z: 0 },
         cameraUp: { x: 0, y: 1, z: 0 },
         projection: "perspective",
         fieldOfView: 50,
+        activeFloorId: "floor_default",
       },
     },
     settings: {

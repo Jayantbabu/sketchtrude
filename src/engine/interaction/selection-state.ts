@@ -10,9 +10,18 @@ export type SelectionState = {
   selectedIds: string[];
   primarySelectedId: string | null;
   hoveredId: string | null;
+  /** Active layer for drawing / panel focus (shared with LayerEngine). */
   focusedLayerId: string | null;
+  /**
+   * Object currently being edited in-place (group enter, path edit, etc.).
+   * Escape exits this context before clearing selection.
+   */
+  activeEditContextId: string | null;
+  /** Sub-element within the primary selection (face, vertex, opening, …). */
+  selectedSubElementId: string | null;
   selectionSource: SelectionSource;
   isolationRootId: string | null;
+  /** @deprecated Prefer activeEditContextId — kept for Phase 2B callers. */
   editingPathId: string | null;
   selectedFaceId: string | null;
 };
@@ -72,6 +81,8 @@ export function createEmptySelectionState(): SelectionState {
     primarySelectedId: null,
     hoveredId: null,
     focusedLayerId: null,
+    activeEditContextId: null,
+    selectedSubElementId: null,
     selectionSource: "programmatic",
     isolationRootId: null,
     editingPathId: null,
