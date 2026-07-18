@@ -212,13 +212,29 @@ export function initChrome() {
     ctx.restore();
   }
 
-  // Grid popover wiring
+  // Grid popover wiring — portal to body + pin top-right near the overflow menu.
+  // Inside #canvas-area (overflow:hidden, left:70px/bottom:80px) it was easy to miss
+  // and could sit under other chrome.
   S.gridPopover = $el('grid-popover');
-  $el('ovf-grid').addEventListener('click', () => {
-    // open the grid settings popover instead of just toggling
+  S.positionGridPopover = function positionGridPopover() {
+    if (!S.gridPopover) return;
+    if (S.gridPopover.parentElement !== document.body) {
+      document.body.appendChild(S.gridPopover);
+    }
+    S.gridPopover.style.position = 'fixed';
+    S.gridPopover.style.left = 'auto';
+    S.gridPopover.style.right = '12px';
+    S.gridPopover.style.top = '52px';
+    S.gridPopover.style.bottom = 'auto';
+    S.gridPopover.style.zIndex = '2200';
+  };
+  $el('ovf-grid').addEventListener('click', (e: any) => {
+    e.stopPropagation();
+    S.positionGridPopover();
     S.gridPopover.classList.add('show');
-    S.overflowPanel.classList.remove('show');
+    if (S.overflowPanel) S.overflowPanel.classList.remove('show');
     S.syncGridUI();
+    if (typeof S.syncOverflowStates === 'function') S.syncOverflowStates();
   }, true);
 
   S.syncGridUI = function syncGridUI() {
@@ -241,12 +257,22 @@ export function initChrome() {
       else { state.showGrid = true; state.gridType = g; }
       S.syncGridUI();
       S.drawDocGrid();
+      if (typeof S.syncOverflowStates === 'function') S.syncOverflowStates();
+      if (typeof S.scheduleAutosave === 'function') S.scheduleAutosave();
     });
   });
   $el('grid-spacing').addEventListener('input', (e: any) => {
     state.gridSpacingMM = parseInt(e.target.value);
     $el('grid-spacing-v').textContent = state.gridSpacingMM + 'mm';
+    // Turning the spacing knob implies the user wants a visible grid.
+    if (!state.showGrid || state.gridType === 'off') {
+      state.showGrid = true;
+      if (state.gridType === 'off') state.gridType = 'square';
+      S.syncGridUI();
+      if (typeof S.syncOverflowStates === 'function') S.syncOverflowStates();
+    }
     S.drawDocGrid();
+    if (typeof S.scheduleAutosave === 'function') S.scheduleAutosave();
   });
   $el('grid-major').addEventListener('input', (e: any) => {
     state.gridMajor = parseInt(e.target.value);

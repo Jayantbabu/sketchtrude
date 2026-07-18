@@ -149,20 +149,34 @@ export function initGuides() {
     }
   }
 
-  // Wire guide popover
+  // Wire guide popover — scope selectors to #guide-popover so we don't steal
+  // clicks from Canvas Size presets / Document Grid buttons (same .guide-type-btn class).
   S.guidePopover = $el('guide-popover');
+  S.positionGuidePopover = function positionGuidePopover() {
+    if (!S.guidePopover) return;
+    if (S.guidePopover.parentElement !== document.body) {
+      document.body.appendChild(S.guidePopover);
+    }
+    S.guidePopover.style.position = 'fixed';
+    S.guidePopover.style.left = 'auto';
+    S.guidePopover.style.right = '12px';
+    S.guidePopover.style.top = '52px';
+    S.guidePopover.style.bottom = 'auto';
+    S.guidePopover.style.zIndex = '2200';
+  };
   $el('btn-guide').addEventListener('click', (e: any) => {
     e.stopPropagation();
     if (S.guidePopover.classList.contains('show')) {
       S.guidePopover.classList.remove('show');
       return;
     }
+    S.positionGuidePopover();
     S.guidePopover.classList.add('show');
   });
 
-  $all('.guide-type-btn').forEach((btn: any) => {
+  $all('#guide-popover [data-guide]').forEach((btn: any) => {
     btn.addEventListener('click', () => {
-      $all('.guide-type-btn').forEach((b: any) => b.classList.remove('active'));
+      $all('#guide-popover [data-guide]').forEach((b: any) => b.classList.remove('active'));
       btn.classList.add('active');
       state.guideType = btn.dataset.guide;
       S.drawGuideGrid();

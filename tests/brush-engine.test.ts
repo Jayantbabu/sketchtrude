@@ -50,6 +50,36 @@ describe("resolveStrokeParams", () => {
     expect(hard.lineWidth).toBeGreaterThan(soft.lineWidth);
   });
 
+  it("keeps Fine Pen nearly constant width (Trace-style fine marker)", () => {
+    const brush = BUILTIN_BRUSH_PRESETS.find((b) => b.id === "pen")!;
+    expect(brush.pressureSize).toBeLessThanOrEqual(0.2);
+    const soft = resolveStrokeParams(brush, 0.15, {
+      color: "#000",
+      size: brush.size,
+      alpha: 1,
+    });
+    const hard = resolveStrokeParams(brush, 1, {
+      color: "#000",
+      size: brush.size,
+      alpha: 1,
+    });
+    // Soft press should still be most of the line weight (not brush-nib taper).
+    expect(soft.lineWidth / hard.lineWidth).toBeGreaterThan(0.75);
+  });
+
+  it("uses multiply for markers and watercolor", () => {
+    for (const id of ["marker", "marker-fine", "watercolour", "highlighter"]) {
+      const brush = BUILTIN_BRUSH_PRESETS.find((b) => b.id === id)!;
+      expect(brush.blend).toBe("multiply");
+    }
+  });
+
+  it("includes Morpholio-style grease pencil and charcoal", () => {
+    const ids = new Set(BUILTIN_BRUSH_PRESETS.map((b) => b.id));
+    expect(ids.has("grease-pencil")).toBe(true);
+    expect(ids.has("charcoal")).toBe(true);
+  });
+
   it("converts scale-aware mm lineweight to document pixels", () => {
     const brush = BUILTIN_BRUSH_PRESETS.find((b) => b.id === "scalepen-medium")!;
     const params = resolveStrokeParams(brush, 0.5, {

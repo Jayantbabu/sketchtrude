@@ -107,6 +107,21 @@ export function applyBrushToCanvasContext(
     ctx.globalAlpha = params.alpha;
   }
 
+  // Soft tips (pencil / watercolor / airbrush): hardness softens the edge.
+  // Skip for erasers — destination-out + shadow produces ugly halos.
+  const hard = brush.hardness ?? 1;
+  if (
+    brush.kind !== "erase" &&
+    brush.tipType === "soft" &&
+    hard < 0.92
+  ) {
+    ctx.shadowColor = color;
+    ctx.shadowBlur = Math.max(0.4, params.lineWidth * (1 - hard) * 1.1);
+  } else {
+    ctx.shadowColor = "transparent";
+    ctx.shadowBlur = 0;
+  }
+
   if (brush.dash?.enabled) {
     const dash = brush.dash.dashMm ?? 4;
     const gap = brush.dash.gapMm ?? 2;

@@ -2143,16 +2143,23 @@
       pressureSize: 0.2
     }),
     // Quick-access aliases (rail tools)
+    // Tuned to Morpholio Trace / Sketchbook Pro feel:
+    // Fine/Technical ≈ constant width; Brush Nib / Fountain ≈ high pressure taper;
+    // Markers ≈ translucent multiply; Pencils ≈ grain + opacity pressure.
     preset({
       id: "pen",
       name: "Fine Pen",
       category: "technical",
       engineType: "technical",
       family: "pen",
-      size: 2,
-      pressureSize: 0.8,
-      maxSize: 20,
-      smoothing: 0.35
+      size: 1.8,
+      hardness: 1,
+      // Trace Fine / Ultra Fine: crisp, nearly constant width (not brush-like taper)
+      pressureSize: 0.12,
+      pressureOpacity: 0,
+      maxSize: 12,
+      smoothing: 0.4,
+      stabilization: 0.22
     }),
     preset({
       id: "technicalpen",
@@ -2161,9 +2168,14 @@
       engineType: "technical",
       family: "pen",
       size: 1.4,
+      hardness: 1,
+      pressureSize: 0,
+      pressureOpacity: 0,
       lineWeightMm: 0.25,
       scaleAware: true,
-      maxSize: 12
+      maxSize: 12,
+      smoothing: 0.5,
+      stabilization: 0.28
     }),
     preset({
       id: "fountainpen",
@@ -2171,10 +2183,12 @@
       category: "ink",
       engineType: "standard",
       family: "pen",
-      size: 3.4,
-      pressureSize: 0.9,
-      pressureOpacity: 0.12,
-      maxSize: 22
+      // Trace Brush Nib Marker: thin↔thick with pressure
+      size: 3.2,
+      pressureSize: 0.92,
+      pressureOpacity: 0.1,
+      maxSize: 28,
+      smoothing: 0.32
     }),
     preset({
       id: "ballpoint",
@@ -2182,11 +2196,13 @@
       category: "ink",
       engineType: "standard",
       family: "pen",
-      size: 1.1,
-      opacity: 0.62,
-      pressureSize: 0.35,
-      pressureOpacity: 0.35,
-      maxSize: 10
+      size: 1.15,
+      opacity: 0.58,
+      pressureSize: 0.28,
+      pressureOpacity: 0.4,
+      jitter: 0.04,
+      maxSize: 8,
+      smoothing: 0.28
     }),
     // Pencil
     preset({
@@ -2195,14 +2211,16 @@
       category: "pencil",
       tipType: "soft",
       family: "pencil",
-      size: 1.5,
-      opacity: 0.75,
-      hardness: 0.5,
-      pressureSize: 0.7,
-      pressureOpacity: 0.5,
-      jitter: 0.15,
-      maxSize: 8,
-      grain: "fine"
+      // Trace Graphite Pencil: soft edge, strong opacity pressure, light tooth
+      size: 1.6,
+      opacity: 0.72,
+      hardness: 0.45,
+      pressureSize: 0.55,
+      pressureOpacity: 0.62,
+      jitter: 0.12,
+      maxSize: 10,
+      grain: "fine",
+      smoothing: 0.28
     }),
     preset({
       id: "mechanicalpencil",
@@ -2210,13 +2228,13 @@
       category: "pencil",
       tipType: "soft",
       family: "pencil",
-      size: 1.2,
-      opacity: 0.7,
-      hardness: 0.7,
-      pressureSize: 0.35,
-      pressureOpacity: 0.4,
-      jitter: 0.05,
-      maxSize: 8
+      size: 1.1,
+      opacity: 0.78,
+      hardness: 0.75,
+      pressureSize: 0.22,
+      pressureOpacity: 0.35,
+      jitter: 0.03,
+      maxSize: 6
     }),
     preset({
       id: "pencil-2b",
@@ -2224,12 +2242,12 @@
       category: "pencil",
       tipType: "soft",
       family: "pencil",
-      size: 2.2,
-      opacity: 0.8,
-      hardness: 0.4,
-      pressureSize: 0.85,
-      pressureOpacity: 0.65,
-      jitter: 0.2,
+      size: 2.4,
+      opacity: 0.78,
+      hardness: 0.38,
+      pressureSize: 0.75,
+      pressureOpacity: 0.7,
+      jitter: 0.18,
       grain: "fine"
     }),
     preset({
@@ -2238,12 +2256,12 @@
       category: "pencil",
       tipType: "soft",
       family: "pencil",
-      size: 3.5,
-      opacity: 0.85,
-      hardness: 0.3,
-      pressureSize: 0.95,
-      pressureOpacity: 0.75,
-      jitter: 0.25,
+      size: 3.6,
+      opacity: 0.82,
+      hardness: 0.28,
+      pressureSize: 0.9,
+      pressureOpacity: 0.78,
+      jitter: 0.22,
       grain: "coarse"
     }),
     preset({
@@ -2252,12 +2270,12 @@
       category: "pencil",
       tipType: "texture",
       family: "pencil",
-      size: 4,
-      opacity: 0.7,
-      hardness: 0.25,
-      pressureSize: 0.8,
+      size: 4.2,
+      opacity: 0.68,
+      hardness: 0.22,
+      pressureSize: 0.75,
       pressureOpacity: 0.6,
-      jitter: 0.4,
+      jitter: 0.42,
       grain: "coarse"
     }),
     preset({
@@ -2266,12 +2284,43 @@
       category: "pencil",
       tipType: "soft",
       family: "pencil",
-      size: 12,
-      opacity: 0.35,
-      hardness: 0.2,
-      pressureSize: 0.5,
-      pressureOpacity: 0.85,
-      spacing: 0.1
+      size: 14,
+      opacity: 0.28,
+      hardness: 0.15,
+      pressureSize: 0.4,
+      pressureOpacity: 0.9,
+      spacing: 0.12
+    }),
+    // Morpholio Grease Pencil — waxy, opaque, soft edge
+    preset({
+      id: "grease-pencil",
+      name: "Grease Pencil",
+      category: "dry-media",
+      tipType: "soft",
+      family: "pencil",
+      size: 5,
+      opacity: 0.92,
+      hardness: 0.35,
+      pressureSize: 0.45,
+      pressureOpacity: 0.25,
+      jitter: 0.08,
+      maxSize: 28
+    }),
+    // Morpholio Charcoal — dusty, high tooth, strong pressure
+    preset({
+      id: "charcoal",
+      name: "Charcoal",
+      category: "dry-media",
+      tipType: "texture",
+      family: "pencil",
+      size: 8,
+      opacity: 0.75,
+      hardness: 0.18,
+      pressureSize: 0.85,
+      pressureOpacity: 0.7,
+      jitter: 0.5,
+      grain: "coarse",
+      maxSize: 48
     }),
     // Ink
     preset({
@@ -2279,58 +2328,75 @@
       name: "Fineliner",
       category: "ink",
       engineType: "standard",
-      size: 1.3,
-      pressureSize: 0.05,
-      smoothing: 0.4
+      // Trace Ultra Fine Marker — razor constant width
+      size: 1.15,
+      hardness: 1,
+      pressureSize: 0.04,
+      pressureOpacity: 0,
+      smoothing: 0.45,
+      maxSize: 6
     }),
     preset({
       id: "brushpen",
       name: "Brush Pen",
       category: "ink",
       tipType: "soft",
-      size: 6,
-      pressureSize: 0.95,
-      pressureOpacity: 0.15,
-      maxSize: 40
+      // Trace Brush Nib Marker
+      size: 5.5,
+      hardness: 0.55,
+      pressureSize: 0.96,
+      pressureOpacity: 0.18,
+      maxSize: 42,
+      smoothing: 0.3
     }),
     preset({
       id: "chiselpen",
       name: "Chisel Pen",
       category: "ink",
       tipType: "chisel",
-      size: 8,
-      pressureSize: 0.3,
+      size: 9,
+      hardness: 0.95,
+      pressureSize: 0.25,
       maxSize: 36
     }),
-    // Markers
+    // Markers — Trace Fine / Chisel / Alcohol: translucent multiply layers
     preset({
       id: "marker",
       name: "Marker",
       category: "marker",
       engineType: "marker",
+      tipType: "soft",
       size: 14,
-      opacity: 0.5,
-      pressureSize: 0.1,
-      pressureOpacity: 0.2,
+      opacity: 0.42,
+      hardness: 0.55,
+      pressureSize: 0.08,
+      pressureOpacity: 0.22,
       blend: "multiply",
-      maxSize: 60
+      maxSize: 60,
+      smoothing: 0.22
     }),
     preset({
       id: "marker-fine",
       name: "Fine Marker",
       category: "marker",
       engineType: "marker",
-      size: 6,
-      opacity: 0.55,
-      blend: "multiply"
+      tipType: "soft",
+      size: 5,
+      opacity: 0.48,
+      hardness: 0.65,
+      pressureSize: 0.06,
+      blend: "multiply",
+      maxSize: 24
     }),
     preset({
       id: "marker-broad",
       name: "Broad Marker",
       category: "marker",
       engineType: "marker",
-      size: 28,
-      opacity: 0.45,
+      tipType: "soft",
+      size: 30,
+      opacity: 0.38,
+      hardness: 0.5,
       blend: "multiply",
       maxSize: 90
     }),
@@ -2341,26 +2407,33 @@
       engineType: "marker",
       tipType: "chisel",
       size: 18,
-      opacity: 0.5,
-      blend: "multiply"
+      opacity: 0.45,
+      hardness: 0.9,
+      pressureSize: 0.15,
+      blend: "multiply",
+      maxSize: 56
     }),
     preset({
       id: "marker-transparent",
       name: "Transparent Marker",
       category: "marker",
       engineType: "marker",
+      tipType: "soft",
       size: 16,
-      opacity: 0.28,
+      opacity: 0.24,
+      hardness: 0.4,
       blend: "multiply",
-      pressureOpacity: 0.4
+      pressureOpacity: 0.45
     }),
     preset({
       id: "highlighter",
       name: "Highlighter",
       category: "marker",
       engineType: "marker",
-      size: 22,
-      opacity: 0.22,
+      tipType: "flat",
+      size: 24,
+      opacity: 0.2,
+      hardness: 0.7,
       blend: "multiply",
       maxSize: 80
     }),
@@ -2371,9 +2444,10 @@
       engineType: "marker",
       tipType: "chisel",
       size: 14,
-      opacity: 0.4,
+      opacity: 0.36,
       blend: "multiply",
-      hardness: 0.85
+      hardness: 0.85,
+      pressureSize: 0.12
     }),
     preset({
       id: "marker-alcohol",
@@ -2382,9 +2456,11 @@
       engineType: "marker",
       tipType: "soft",
       size: 16,
-      opacity: 0.32,
+      opacity: 0.3,
+      hardness: 0.35,
       blend: "multiply",
-      pressureOpacity: 0.35
+      pressureOpacity: 0.4,
+      pressureSize: 0.2
     }),
     // Paint / render
     preset({
@@ -2393,10 +2469,11 @@
       category: "paint",
       engineType: "paint",
       tipType: "soft",
-      size: 8,
-      opacity: 0.9,
-      hardness: 0.7,
-      pressureSize: 0.9,
+      size: 9,
+      opacity: 0.88,
+      hardness: 0.55,
+      pressureSize: 0.88,
+      pressureOpacity: 0.15,
       maxSize: 80
     }),
     preset({
@@ -2407,7 +2484,7 @@
       tipType: "flat",
       size: 14,
       hardness: 0.9,
-      pressureSize: 0.4
+      pressureSize: 0.35
     }),
     preset({
       id: "paint-dry",
@@ -2416,9 +2493,10 @@
       engineType: "paint",
       tipType: "texture",
       size: 16,
-      opacity: 0.7,
-      hardness: 0.35,
-      jitter: 0.25,
+      opacity: 0.65,
+      hardness: 0.3,
+      jitter: 0.3,
+      pressureSize: 0.5,
       grain: "coarse"
     }),
     preset({
@@ -2427,14 +2505,17 @@
       category: "watercolor",
       engineType: "watercolor",
       tipType: "soft",
-      size: 28,
-      opacity: 0.14,
-      hardness: 0.2,
-      pressureSize: 0.9,
-      pressureOpacity: 0.8,
-      jitter: 0.08,
+      // Trace Watercolor: very soft, translucent, builds with pressure
+      size: 30,
+      opacity: 0.12,
+      hardness: 0.12,
+      pressureSize: 0.85,
+      pressureOpacity: 0.85,
+      jitter: 0.06,
       blend: "multiply",
-      maxSize: 150
+      flow: 0.75,
+      maxSize: 160,
+      smoothing: 0.42
     }),
     preset({
       id: "wc-wash",
@@ -2442,11 +2523,12 @@
       category: "watercolor",
       engineType: "watercolor",
       tipType: "soft",
-      size: 48,
-      opacity: 0.1,
-      hardness: 0.1,
+      size: 52,
+      opacity: 0.08,
+      hardness: 0.06,
       blend: "multiply",
-      maxSize: 200
+      pressureOpacity: 0.7,
+      maxSize: 220
     }),
     preset({
       id: "wc-wet",
@@ -2454,11 +2536,12 @@
       category: "watercolor",
       engineType: "watercolor",
       tipType: "soft",
-      size: 32,
-      opacity: 0.12,
-      hardness: 0.08,
+      size: 34,
+      opacity: 0.1,
+      hardness: 0.05,
       blend: "multiply",
-      pressureOpacity: 0.9
+      pressureSize: 0.7,
+      pressureOpacity: 0.92
     }),
     preset({
       id: "roller",
@@ -2466,10 +2549,12 @@
       category: "paint",
       engineType: "roller",
       tipType: "flat",
-      size: 40,
-      opacity: 0.85,
-      spacing: 0.15,
-      pressureSize: 0.1,
+      // Trace Roller Brush — dense fill, little pressure response
+      size: 42,
+      opacity: 0.9,
+      hardness: 0.95,
+      spacing: 0.12,
+      pressureSize: 0.05,
       maxSize: 160
     }),
     preset({
@@ -2477,11 +2562,12 @@
       name: "Soft Airbrush",
       category: "airbrush",
       tipType: "soft",
-      size: 36,
-      opacity: 0.18,
-      hardness: 0.05,
-      pressureOpacity: 0.7,
-      spacing: 0.08,
+      size: 40,
+      opacity: 0.14,
+      hardness: 0.04,
+      pressureOpacity: 0.75,
+      pressureSize: 0.25,
+      spacing: 0.07,
       maxSize: 180
     }),
     preset({
@@ -2489,10 +2575,11 @@
       name: "Hard Airbrush",
       category: "airbrush",
       tipType: "soft",
-      size: 24,
-      opacity: 0.28,
-      hardness: 0.45,
-      pressureOpacity: 0.5
+      size: 22,
+      opacity: 0.26,
+      hardness: 0.4,
+      pressureOpacity: 0.55,
+      pressureSize: 0.2
     }),
     // Texture / landscape
     preset({
@@ -2651,9 +2738,12 @@
   var BRUSH_FAMILIES = {
     pen: [
       "pen",
+      "fineliner",
       "technicalpen",
       "fountainpen",
+      "brushpen",
       "ballpoint",
+      "chiselpen",
       "tech-xfine",
       "tech-fine",
       "tech-medium",
@@ -2664,10 +2754,7 @@
       "tech-dashed",
       "tech-centerline",
       "tech-construction",
-      "tech-revision",
-      "fineliner",
-      "brushpen",
-      "chiselpen"
+      "tech-revision"
     ],
     pencil: [
       "pencil",
@@ -2675,7 +2762,9 @@
       "pencil-2b",
       "pencil-4b",
       "pencil-rough",
-      "pencil-shading"
+      "pencil-shading",
+      "grease-pencil",
+      "charcoal"
     ]
   };
 
@@ -2825,7 +2914,7 @@
     };
   }
   function applyBrushToCanvasContext(ctx, brush, params, color, options = {}) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     ctx.globalCompositeOperation = params.composite;
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
@@ -2837,9 +2926,17 @@
     } else {
       ctx.globalAlpha = params.alpha;
     }
-    if ((_a = brush.dash) == null ? void 0 : _a.enabled) {
-      const dash = (_b = brush.dash.dashMm) != null ? _b : 4;
-      const gap = (_c = brush.dash.gapMm) != null ? _c : 2;
+    const hard = (_a = brush.hardness) != null ? _a : 1;
+    if (brush.kind !== "erase" && brush.tipType === "soft" && hard < 0.92) {
+      ctx.shadowColor = color;
+      ctx.shadowBlur = Math.max(0.4, params.lineWidth * (1 - hard) * 1.1);
+    } else {
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+    }
+    if ((_b = brush.dash) == null ? void 0 : _b.enabled) {
+      const dash = (_c = brush.dash.dashMm) != null ? _c : 4;
+      const gap = (_d = brush.dash.gapMm) != null ? _d : 2;
       if (brush.dash.pattern === "centerline") {
         ctx.setLineDash([dash * 3, gap, dash, gap]);
       } else {
@@ -3424,11 +3521,11 @@
       });
     }
     S.BUILTIN_BRUSHES = [
-      { id: "pen", name: "Fine Pen", tipType: "round", size: 2, opacity: 1, spacing: 0.06, hardness: 1, pressureSize: 0.8, pressureOpacity: 0, jitter: 0, blend: "source-over", maxSize: 20, kind: "draw", builtIn: true, category: "technical", engineType: "technical", smoothing: 0.35, stabilization: 0.2, flow: 1 },
-      { id: "marker", name: "Marker", tipType: "round", size: 14, opacity: 0.5, spacing: 0.04, hardness: 1, pressureSize: 0.1, pressureOpacity: 0.2, jitter: 0, blend: "multiply", maxSize: 60, kind: "draw", builtIn: true, category: "marker", engineType: "marker", smoothing: 0.25, stabilization: 0.15, flow: 1 },
-      { id: "pencil", name: "HB Pencil", tipType: "soft", size: 1.5, opacity: 0.75, spacing: 0.08, hardness: 0.5, pressureSize: 0.7, pressureOpacity: 0.5, jitter: 0.15, blend: "source-over", maxSize: 8, kind: "draw", builtIn: true, category: "pencil", engineType: "standard", smoothing: 0.3, stabilization: 0.15, flow: 1, family: "pencil" },
-      { id: "brush", name: "Round Brush", tipType: "soft", size: 8, opacity: 0.9, spacing: 0.05, hardness: 0.7, pressureSize: 0.9, pressureOpacity: 0, jitter: 0, blend: "source-over", maxSize: 80, kind: "draw", builtIn: true, category: "paint", engineType: "paint", smoothing: 0.3, stabilization: 0.2, flow: 1 },
-      { id: "watercolour", name: "Watercolour", tipType: "soft", size: 28, opacity: 0.14, spacing: 0.07, hardness: 0.2, pressureSize: 0.9, pressureOpacity: 0.8, jitter: 0.08, blend: "multiply", maxSize: 150, kind: "draw", builtIn: true, category: "watercolor", engineType: "watercolor", smoothing: 0.4, stabilization: 0.25, flow: 0.8 },
+      { id: "pen", name: "Fine Pen", tipType: "round", size: 1.8, opacity: 1, spacing: 0.06, hardness: 1, pressureSize: 0.12, pressureOpacity: 0, jitter: 0, blend: "source-over", maxSize: 12, kind: "draw", builtIn: true, category: "technical", engineType: "technical", smoothing: 0.4, stabilization: 0.22, flow: 1 },
+      { id: "marker", name: "Marker", tipType: "soft", size: 14, opacity: 0.42, spacing: 0.04, hardness: 0.55, pressureSize: 0.08, pressureOpacity: 0.22, jitter: 0, blend: "multiply", maxSize: 60, kind: "draw", builtIn: true, category: "marker", engineType: "marker", smoothing: 0.22, stabilization: 0.15, flow: 1 },
+      { id: "pencil", name: "HB Pencil", tipType: "soft", size: 1.6, opacity: 0.72, spacing: 0.08, hardness: 0.45, pressureSize: 0.55, pressureOpacity: 0.62, jitter: 0.12, blend: "source-over", maxSize: 10, kind: "draw", builtIn: true, category: "pencil", engineType: "standard", smoothing: 0.28, stabilization: 0.15, flow: 1, family: "pencil", grain: "fine" },
+      { id: "brush", name: "Round Brush", tipType: "soft", size: 9, opacity: 0.88, spacing: 0.05, hardness: 0.55, pressureSize: 0.88, pressureOpacity: 0.15, jitter: 0, blend: "source-over", maxSize: 80, kind: "draw", builtIn: true, category: "paint", engineType: "paint", smoothing: 0.3, stabilization: 0.2, flow: 1 },
+      { id: "watercolour", name: "Watercolour", tipType: "soft", size: 30, opacity: 0.12, spacing: 0.07, hardness: 0.12, pressureSize: 0.85, pressureOpacity: 0.85, jitter: 0.06, blend: "multiply", maxSize: 160, kind: "draw", builtIn: true, category: "watercolor", engineType: "watercolor", smoothing: 0.42, stabilization: 0.25, flow: 0.75 },
       { id: "eraser", name: "Hard Eraser", tipType: "round", size: 24, opacity: 1, spacing: 0.05, hardness: 0.8, pressureSize: 0.3, pressureOpacity: 0, jitter: 0, blend: "destination-out", maxSize: 100, kind: "erase", builtIn: true, category: "eraser", engineType: "eraser", smoothing: 0.2, stabilization: 0.1, flow: 1 },
       { id: "technicalpen", name: "Technical Pen", family: "pen", tipType: "round", size: 1.4, opacity: 1, spacing: 0.05, hardness: 1, pressureSize: 0, pressureOpacity: 0, jitter: 0, blend: "source-over", maxSize: 12, kind: "draw", builtIn: true, category: "technical", engineType: "technical", smoothing: 0.45, stabilization: 0.25, flow: 1 },
       { id: "fountainpen", name: "Fountain Pen", family: "pen", tipType: "round", size: 3.4, opacity: 1, spacing: 0.05, hardness: 1, pressureSize: 0.9, pressureOpacity: 0.12, jitter: 0, blend: "source-over", maxSize: 22, kind: "draw", builtIn: true, category: "ink", engineType: "standard", smoothing: 0.35, stabilization: 0.2, flow: 1 },
@@ -3834,6 +3931,8 @@
       S.doc.dpi = newDpi;
       S.doc.wPx = Math.round(S.doc.wMM / 25.4 * S.doc.dpi);
       S.doc.hPx = Math.round(S.doc.hMM / 25.4 * S.doc.dpi);
+      state2.infiniteCanvas = false;
+      state2.autoExpandCanvas = false;
       state2.layers.forEach((layer) => {
         ["canvas", "imageCanvas"].forEach((key) => {
           const src = layer[key];
@@ -3850,6 +3949,7 @@
         });
         layer.history = [];
         layer.redo = [];
+        layer._cur = null;
       });
       S.strokeCanvas.width = S.doc.wPx;
       S.strokeCanvas.height = S.doc.hPx;
@@ -3987,17 +4087,16 @@
       state2.pinchStart = null;
     };
     S.dismissSketchOverlays = function dismissSketchOverlays() {
-      S.showWall2dPalette(false);
-      S.showOpeningPalette(false);
+      if (typeof S.showWall2dPalette === "function") S.showWall2dPalette(false);
+      if (typeof S.showOpeningPalette === "function") S.showOpeningPalette(false);
       if (state2.polyActive) {
         state2.polyPoints = [];
         state2.polyActive = false;
         const ph = document.getElementById("poly-hint");
         if (ph) ph.style.display = "none";
       }
-      S.closeGroupFlyout();
+      if (typeof S.closeGroupFlyout === "function") S.closeGroupFlyout();
       if (S._brushFlyout) S._brushFlyout.style.display = "none";
-      const selBar = document.getElementById("sel-bar");
       if (S.selBar) S.selBar.classList.remove("show");
     };
     S.paperFormatName = function paperFormatName(w, h) {
@@ -4038,18 +4137,23 @@
       return S._modalScrim;
     };
     S.closeCanvasSizeDialog = function closeCanvasSizeDialog() {
+      if (!S.canvasSizeDialog) return;
       S.canvasSizeDialog.classList.remove("show");
       S.canvasSizeDialog.style.display = "none";
       if (S._modalScrim) S._modalScrim.style.display = "none";
     };
     S.openCanvasSize = function openCanvasSize() {
+      if (!S.canvasSizeDialog) return;
       S.releaseTransientInput();
       S.dismissSketchOverlays();
       if (typeof window._closeMassMenus === "function") window._closeMassMenus();
       document.getElementById("cs-w").value = S.doc.wMM;
       document.getElementById("cs-h").value = S.doc.hMM;
       document.getElementById("cs-dpi").value = S.doc.dpi;
-      S.ensureModalScrim().style.display = "block";
+      const scrim = S.ensureModalScrim();
+      document.body.appendChild(scrim);
+      document.body.appendChild(S.canvasSizeDialog);
+      scrim.style.display = "block";
       S.canvasSizeDialog.style.display = "block";
       S.canvasSizeDialog.classList.add("show");
       const vw = window.innerWidth, vh = window.innerHeight;
@@ -5945,6 +6049,14 @@
         const alpha = state2.alpha * (1 - (brush.pressureOpacity || 0) + (brush.pressureOpacity || 0) * pressure);
         ctx.globalAlpha = brush.kind === "erase" ? 1 : Math.min(1, Math.max(0.02, alpha));
       }
+      const hard = brush.hardness == null ? 1 : brush.hardness;
+      if (brush.kind !== "erase" && brush.tipType === "soft" && hard < 0.92) {
+        ctx.shadowColor = state2.color;
+        ctx.shadowBlur = Math.max(0.4, size * (1 - hard) * 1.1);
+      } else {
+        ctx.shadowColor = "transparent";
+        ctx.shadowBlur = 0;
+      }
       if (brush.dash && brush.dash.enabled) {
         const dash = brush.dash.dashMm || 4;
         const gap = brush.dash.gapMm || 2;
@@ -5993,7 +6105,31 @@
       ctx.drawImage(off, x - w / 2 + jx, y - h / 2 + jy, w, h);
       ctx.restore();
     };
+    S.isWheelOverScrollableUi = function isWheelOverScrollableUi(target) {
+      if (!target || !target.closest) return false;
+      return !!target.closest([
+        "#brush-library",
+        "#brush-list",
+        "#brush-flyout",
+        "#brush-modal",
+        "#layers-panel",
+        "#color-popover",
+        "#stencil-popover",
+        "#grid-popover",
+        "#guide-popover",
+        "#overflow-panel",
+        "#canvas-size-dialog",
+        "#scale-prompt",
+        ".popover",
+        ".brush-library",
+        ".layers-scroll",
+        "input",
+        "textarea",
+        "select"
+      ].join(","));
+    };
     S.area.addEventListener("wheel", (e) => {
+      if (S.isWheelOverScrollableUi(e.target)) return;
       if (e.ctrlKey || e.metaKey || state2.mode === "navigate" || state2.mode === "draw") {
         e.preventDefault();
         const delta = -e.deltaY * 1e-3;
@@ -7339,11 +7475,14 @@
     S.ensureBrushFlyout = function ensureBrushFlyout() {
       if (S._brushFlyout) return S._brushFlyout;
       const style = document.createElement("style");
-      style.textContent = "#brush-flyout{position:fixed;z-index:1300;display:none;flex-direction:column;gap:3px;background:#1c1a18;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:6px;box-shadow:0 12px 34px rgba(0,0,0,0.5);min-width:170px;}#brush-flyout .bfi{display:flex;align-items:center;gap:11px;font:600 12px ui-sans-serif,system-ui;color:#e8e4de;padding:9px 12px;border-radius:8px;cursor:pointer;background:transparent;border:none;text-align:left;width:100%;}#brush-flyout .bfi:hover{background:#2b2826;}#brush-flyout .bfi.on{background:#a02835;color:#fff;}#brush-flyout .bfi .sw{width:26px;border-radius:3px;background:currentColor;opacity:0.9;flex-shrink:0;}";
+      style.textContent = "#brush-flyout{position:fixed;z-index:1300;display:none;flex-direction:column;gap:3px;background:#1c1a18;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:6px;box-shadow:0 12px 34px rgba(0,0,0,0.5);min-width:170px;max-height:min(70vh,520px);overflow-y:auto;overscroll-behavior:contain;}#brush-flyout .bfi{display:flex;align-items:center;gap:11px;font:600 12px ui-sans-serif,system-ui;color:#e8e4de;padding:9px 12px;border-radius:8px;cursor:pointer;background:transparent;border:none;text-align:left;width:100%;flex-shrink:0;}#brush-flyout .bfi:hover{background:#2b2826;}#brush-flyout .bfi.on{background:#a02835;color:#fff;}#brush-flyout .bfi .sw{width:26px;border-radius:3px;background:currentColor;opacity:0.9;flex-shrink:0;}#brush-flyout::-webkit-scrollbar{width:6px;}#brush-flyout::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.22);border-radius:4px;}";
       document.head.appendChild(style);
       const el = document.createElement("div");
       el.id = "brush-flyout";
       el.addEventListener("pointerdown", (e) => e.stopPropagation());
+      el.addEventListener("wheel", (e) => {
+        e.stopPropagation();
+      }, { passive: true });
       document.body.appendChild(el);
       S._brushFlyout = el;
       document.addEventListener("pointerdown", () => {
@@ -7412,6 +7551,19 @@
       S.brushLibrary.style.display = "block";
       S.brushLibrary.classList.add("show");
       S.renderBrushList();
+      const list = $el("brush-list");
+      if (list && !list.dataset.wheelBound) {
+        list.dataset.wheelBound = "1";
+        list.addEventListener("wheel", (e) => {
+          e.stopPropagation();
+        }, { passive: true });
+      }
+      if (S.brushLibrary && !S.brushLibrary.dataset.wheelBound) {
+        S.brushLibrary.dataset.wheelBound = "1";
+        S.brushLibrary.addEventListener("wheel", (e) => {
+          e.stopPropagation();
+        }, { passive: true });
+      }
     };
     S.closeBrushLibrary = function closeBrushLibrary() {
       var _a2;
@@ -8755,10 +8907,25 @@
       ctx.restore();
     };
     S.gridPopover = $el("grid-popover");
-    $el("ovf-grid").addEventListener("click", () => {
+    S.positionGridPopover = function positionGridPopover() {
+      if (!S.gridPopover) return;
+      if (S.gridPopover.parentElement !== document.body) {
+        document.body.appendChild(S.gridPopover);
+      }
+      S.gridPopover.style.position = "fixed";
+      S.gridPopover.style.left = "auto";
+      S.gridPopover.style.right = "12px";
+      S.gridPopover.style.top = "52px";
+      S.gridPopover.style.bottom = "auto";
+      S.gridPopover.style.zIndex = "2200";
+    };
+    $el("ovf-grid").addEventListener("click", (e) => {
+      e.stopPropagation();
+      S.positionGridPopover();
       S.gridPopover.classList.add("show");
-      S.overflowPanel.classList.remove("show");
+      if (S.overflowPanel) S.overflowPanel.classList.remove("show");
       S.syncGridUI();
+      if (typeof S.syncOverflowStates === "function") S.syncOverflowStates();
     }, true);
     S.syncGridUI = function syncGridUI() {
       $all("#grid-popover [data-grid]").forEach((b) => b.classList.toggle("active", b.dataset.grid === (state2.showGrid ? state2.gridType : "off")));
@@ -8781,12 +8948,21 @@
         }
         S.syncGridUI();
         S.drawDocGrid();
+        if (typeof S.syncOverflowStates === "function") S.syncOverflowStates();
+        if (typeof S.scheduleAutosave === "function") S.scheduleAutosave();
       });
     });
     $el("grid-spacing").addEventListener("input", (e) => {
       state2.gridSpacingMM = parseInt(e.target.value);
       $el("grid-spacing-v").textContent = state2.gridSpacingMM + "mm";
+      if (!state2.showGrid || state2.gridType === "off") {
+        state2.showGrid = true;
+        if (state2.gridType === "off") state2.gridType = "square";
+        S.syncGridUI();
+        if (typeof S.syncOverflowStates === "function") S.syncOverflowStates();
+      }
       S.drawDocGrid();
+      if (typeof S.scheduleAutosave === "function") S.scheduleAutosave();
     });
     $el("grid-major").addEventListener("input", (e) => {
       state2.gridMajor = parseInt(e.target.value);
@@ -11053,17 +11229,30 @@
       }
     };
     S.guidePopover = $el("guide-popover");
+    S.positionGuidePopover = function positionGuidePopover() {
+      if (!S.guidePopover) return;
+      if (S.guidePopover.parentElement !== document.body) {
+        document.body.appendChild(S.guidePopover);
+      }
+      S.guidePopover.style.position = "fixed";
+      S.guidePopover.style.left = "auto";
+      S.guidePopover.style.right = "12px";
+      S.guidePopover.style.top = "52px";
+      S.guidePopover.style.bottom = "auto";
+      S.guidePopover.style.zIndex = "2200";
+    };
     $el("btn-guide").addEventListener("click", (e) => {
       e.stopPropagation();
       if (S.guidePopover.classList.contains("show")) {
         S.guidePopover.classList.remove("show");
         return;
       }
+      S.positionGuidePopover();
       S.guidePopover.classList.add("show");
     });
-    $all(".guide-type-btn").forEach((btn) => {
+    $all("#guide-popover [data-guide]").forEach((btn) => {
       btn.addEventListener("click", () => {
-        $all(".guide-type-btn").forEach((b) => b.classList.remove("active"));
+        $all("#guide-popover [data-guide]").forEach((b) => b.classList.remove("active"));
         btn.classList.add("active");
         state2.guideType = btn.dataset.guide;
         S.drawGuideGrid();
@@ -14598,11 +14787,16 @@
     });
     $el("ovf-guide").addEventListener("click", (e) => {
       e.stopPropagation();
-      if (S.guidePopover.classList.contains("show")) S.guidePopover.classList.remove("show");
-      else S.guidePopover.classList.add("show");
+      if (S.guidePopover.classList.contains("show")) {
+        S.guidePopover.classList.remove("show");
+      } else {
+        if (typeof S.positionGuidePopover === "function") S.positionGuidePopover();
+        S.guidePopover.classList.add("show");
+      }
       S.overflowPanel.classList.remove("show");
     });
-    $el("ovf-canvas-size").addEventListener("click", () => {
+    $el("ovf-canvas-size").addEventListener("click", (e) => {
+      e.stopPropagation();
       S.openCanvasSize();
       S.overflowPanel.classList.remove("show");
     });

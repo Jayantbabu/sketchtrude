@@ -904,6 +904,14 @@ export function initStrokeInput() {
       const alpha = state.alpha * (1 - (brush.pressureOpacity || 0) + (brush.pressureOpacity || 0) * pressure);
       ctx.globalAlpha = brush.kind === 'erase' ? 1 : Math.min(1, Math.max(0.02, alpha));
     }
+    const hard = brush.hardness == null ? 1 : brush.hardness;
+    if (brush.kind !== 'erase' && brush.tipType === 'soft' && hard < 0.92) {
+      ctx.shadowColor = state.color;
+      ctx.shadowBlur = Math.max(0.4, size * (1 - hard) * 1.1);
+    } else {
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+    }
     if (brush.dash && brush.dash.enabled) {
       const dash = brush.dash.dashMm || 4;
       const gap = brush.dash.gapMm || 2;
@@ -961,7 +969,32 @@ export function initStrokeInput() {
   }
 
   /* =================== MOUSE WHEEL ZOOM =================== */
+  // Panels/popovers inside #canvas-area must keep native scroll — don't steal the wheel for zoom.
+  S.isWheelOverScrollableUi = function isWheelOverScrollableUi(target: any) {
+    if (!target || !target.closest) return false;
+    return !!target.closest([
+      '#brush-library',
+      '#brush-list',
+      '#brush-flyout',
+      '#brush-modal',
+      '#layers-panel',
+      '#color-popover',
+      '#stencil-popover',
+      '#grid-popover',
+      '#guide-popover',
+      '#overflow-panel',
+      '#canvas-size-dialog',
+      '#scale-prompt',
+      '.popover',
+      '.brush-library',
+      '.layers-scroll',
+      'input',
+      'textarea',
+      'select',
+    ].join(','));
+  };
   S.area.addEventListener('wheel', (e: any) => {
+    if (S.isWheelOverScrollableUi(e.target)) return;
     // Allow scroll-wheel zoom in draw mode (graphic tablets) without requiring Ctrl
     if (e.ctrlKey || e.metaKey || state.mode === 'navigate' || state.mode === 'draw') {
       e.preventDefault();

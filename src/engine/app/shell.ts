@@ -261,11 +261,16 @@ export function initShell() {
   // Wire overflow buttons to hidden originals
   $el('ovf-guide').addEventListener('click', (e: any) => {
     e.stopPropagation();
-    if (S.guidePopover.classList.contains('show')) S.guidePopover.classList.remove('show');
-    else S.guidePopover.classList.add('show');
+    if (S.guidePopover.classList.contains('show')) {
+      S.guidePopover.classList.remove('show');
+    } else {
+      if (typeof S.positionGuidePopover === 'function') S.positionGuidePopover();
+      S.guidePopover.classList.add('show');
+    }
     S.overflowPanel.classList.remove('show');
   });
-  $el('ovf-canvas-size').addEventListener('click', () => {
+  $el('ovf-canvas-size').addEventListener('click', (e: any) => {
+    e.stopPropagation();
     S.openCanvasSize();
     S.overflowPanel.classList.remove('show');
   });

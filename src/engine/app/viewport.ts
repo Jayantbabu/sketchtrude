@@ -66,6 +66,9 @@ export function initViewport() {
     S.doc.wMM = newWmm; S.doc.hMM = newHmm; S.doc.dpi = newDpi;
     S.doc.wPx = Math.round(S.doc.wMM / 25.4 * S.doc.dpi);
     S.doc.hPx = Math.round(S.doc.hMM / 25.4 * S.doc.dpi);
+    // Manual paper size exits the "infinite canvas" project mode.
+    state.infiniteCanvas = false;
+    state.autoExpandCanvas = false;
 
     // Resize every layer's canvases, scaling existing content to the new size.
     state.layers.forEach((layer: any) => {
@@ -83,6 +86,7 @@ export function initViewport() {
       // Reset history (snapshots are old-size ImageData)
       layer.history = [];
       layer.redo = [];
+      layer._cur = null;
     });
 
     // Resize helper canvases
@@ -192,17 +196,16 @@ export function initViewport() {
   }
 
   S.dismissSketchOverlays = function dismissSketchOverlays() {
-    S.showWall2dPalette(false);
-    S.showOpeningPalette(false);
+    if (typeof S.showWall2dPalette === 'function') S.showWall2dPalette(false);
+    if (typeof S.showOpeningPalette === 'function') S.showOpeningPalette(false);
     if (state.polyActive) {
       state.polyPoints = [];
       state.polyActive = false;
       const ph = document.getElementById('poly-hint') as any;
       if (ph) ph.style.display = 'none';
     }
-    S.closeGroupFlyout();
+    if (typeof S.closeGroupFlyout === 'function') S.closeGroupFlyout();
     if (S._brushFlyout) S._brushFlyout.style.display = 'none';
-    const selBar = document.getElementById('sel-bar') as any;
     if (S.selBar) S.selBar.classList.remove('show');
   }
 
@@ -230,6 +233,9 @@ export function initViewport() {
   }
 
   // Canvas size dialog
+  // Dialog lives in #canvas-area in the HTML, but the dimming scrim is appended to
+  // document.body. That puts the scrim in a higher stacking context than .app, so it
+  // sat on top of the dialog and ate all clicks. Portal both to <body> when opening.
   S.canvasSizeDialog = document.getElementById('canvas-size-dialog') as any;
   S._modalScrim = null;
   S.ensureModalScrim = function ensureModalScrim() {
@@ -241,18 +247,24 @@ export function initViewport() {
     return S._modalScrim;
   }
   S.closeCanvasSizeDialog = function closeCanvasSizeDialog() {
+    if (!S.canvasSizeDialog) return;
     S.canvasSizeDialog.classList.remove('show');
     S.canvasSizeDialog.style.display = 'none';
     if (S._modalScrim) S._modalScrim.style.display = 'none';
   }
   S.openCanvasSize = function openCanvasSize() {
+    if (!S.canvasSizeDialog) return;
     S.releaseTransientInput();
     S.dismissSketchOverlays();
     if (typeof (window as any)._closeMassMenus === 'function') (window as any)._closeMassMenus();
     (document.getElementById('cs-w') as any).value = S.doc.wMM;
     (document.getElementById('cs-h') as any).value = S.doc.hMM;
     (document.getElementById('cs-dpi') as any).value = S.doc.dpi;
-    S.ensureModalScrim().style.display = 'block';
+    const scrim = S.ensureModalScrim();
+    // Keep dialog as a body sibling after the scrim so z-index 2100 wins hit-testing.
+    document.body.appendChild(scrim);
+    document.body.appendChild(S.canvasSizeDialog);
+    scrim.style.display = 'block';
     S.canvasSizeDialog.style.display = 'block';
     S.canvasSizeDialog.classList.add('show');
     const vw = window.innerWidth, vh = window.innerHeight;

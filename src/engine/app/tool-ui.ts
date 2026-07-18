@@ -298,14 +298,16 @@ export function initToolUi() {
     if (S._brushFlyout) return S._brushFlyout;
     const style = document.createElement('style');
     style.textContent =
-      '#brush-flyout{position:fixed;z-index:1300;display:none;flex-direction:column;gap:3px;background:#1c1a18;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:6px;box-shadow:0 12px 34px rgba(0,0,0,0.5);min-width:170px;}' +
-      '#brush-flyout .bfi{display:flex;align-items:center;gap:11px;font:600 12px ui-sans-serif,system-ui;color:#e8e4de;padding:9px 12px;border-radius:8px;cursor:pointer;background:transparent;border:none;text-align:left;width:100%;}' +
+      '#brush-flyout{position:fixed;z-index:1300;display:none;flex-direction:column;gap:3px;background:#1c1a18;border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:6px;box-shadow:0 12px 34px rgba(0,0,0,0.5);min-width:170px;max-height:min(70vh,520px);overflow-y:auto;overscroll-behavior:contain;}' +
+      '#brush-flyout .bfi{display:flex;align-items:center;gap:11px;font:600 12px ui-sans-serif,system-ui;color:#e8e4de;padding:9px 12px;border-radius:8px;cursor:pointer;background:transparent;border:none;text-align:left;width:100%;flex-shrink:0;}' +
       '#brush-flyout .bfi:hover{background:#2b2826;}' +
       '#brush-flyout .bfi.on{background:#a02835;color:#fff;}' +
-      '#brush-flyout .bfi .sw{width:26px;border-radius:3px;background:currentColor;opacity:0.9;flex-shrink:0;}';
+      '#brush-flyout .bfi .sw{width:26px;border-radius:3px;background:currentColor;opacity:0.9;flex-shrink:0;}' +
+      '#brush-flyout::-webkit-scrollbar{width:6px;}#brush-flyout::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.22);border-radius:4px;}';
     document.head.appendChild(style);
     const el = document.createElement('div'); el.id = 'brush-flyout';
     el.addEventListener('pointerdown', (e: any) => e.stopPropagation());
+    el.addEventListener('wheel', (e: any) => { e.stopPropagation(); }, { passive: true });
     document.body.appendChild(el); S._brushFlyout = el;
     document.addEventListener('pointerdown', () => { if (S._brushFlyout) S._brushFlyout.style.display = 'none'; });
     return el;
@@ -366,6 +368,16 @@ export function initToolUi() {
     S.brushLibrary.style.display = 'block';   // override inline display:none
     S.brushLibrary.classList.add('show');
     S.renderBrushList();
+    // Ensure the list can receive wheel scroll (canvas-area also listens for zoom).
+    const list = $el('brush-list');
+    if (list && !list.dataset.wheelBound) {
+      list.dataset.wheelBound = '1';
+      list.addEventListener('wheel', (e: any) => { e.stopPropagation(); }, { passive: true });
+    }
+    if (S.brushLibrary && !S.brushLibrary.dataset.wheelBound) {
+      S.brushLibrary.dataset.wheelBound = '1';
+      S.brushLibrary.addEventListener('wheel', (e: any) => { e.stopPropagation(); }, { passive: true });
+    }
   }
 
   S.closeBrushLibrary = function closeBrushLibrary() {
