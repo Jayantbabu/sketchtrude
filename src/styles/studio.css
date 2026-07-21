@@ -236,7 +236,7 @@
   .color-wheel-wrap{display:flex;flex-direction:column;gap:10px;}
   .color-wheel-stack{position:relative;width:200px;height:200px;margin:0 auto;}
   .color-wheel-canvas{display:block;width:200px;height:200px;}
-  .color-sv-canvas{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);}
+  .color-sv-canvas{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(45deg);transform-origin:center center;}
   .wheel-row{display:flex;align-items:center;gap:10px;}
   .color-current-swatch{width:38px;height:38px;border-radius:8px;border:1px solid var(--line-2);flex-shrink:0;box-shadow:inset 0 0 0 2px rgba(255,255,255,0.5);}
   .color-hex-input{flex:1;border:1px solid var(--line-2);background:white;padding:7px 10px;border-radius:8px;font-family:'JetBrains Mono',monospace;font-size:12px;text-transform:uppercase;outline:none;}
@@ -274,10 +274,31 @@
   .guide-type-btn:hover{background:var(--paper-3);border-color:var(--ink);}
   .guide-type-btn.active{background:var(--ink);color:#fff;border-color:var(--ink);}
 
-  /* AREA POLYGON */
-  .area-vertex{fill:#15803d;stroke:white;stroke-width:2;cursor:pointer;}
-  .area-edge{stroke:#15803d;stroke-width:2.5;stroke-dasharray:8 5;fill:none;}
-  .area-fill{fill:rgba(21,128,61,0.08);stroke:none;}
+  /* AREA / POLYGON VERTICES */
+  .area-vertex{fill:#a02835;stroke:#fff;stroke-width:1.5;cursor:pointer;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.35));}
+  .area-vertex-first{fill:#a02835;stroke:#fff;stroke-width:2;}
+  .area-vertex-close{fill:#c43a48;}
+  .area-vertex-close-ring{fill:none;stroke:#a02835;stroke-width:1.5;stroke-dasharray:3 2;opacity:0.85;pointer-events:none;}
+  .area-edge{stroke:#a02835;stroke-width:2;stroke-dasharray:6 4;fill:none;}
+  .area-fill{fill:rgba(160,40,53,0.08);stroke:none;}
+
+  .puck-draw-controls{display:contents;}
+  .puck-context{display:flex;align-items:center;gap:6px;padding:0 4px;flex-wrap:wrap;max-width:min(92vw,720px);}
+  .puck-chip{border:1px solid rgba(255,255,255,0.18);background:transparent;color:#e8e4de;font:600 11px ui-sans-serif,system-ui;padding:6px 10px;border-radius:8px;cursor:pointer;}
+  .puck-chip.on,.puck-chip:hover{background:#a02835;border-color:#a02835;color:#fff;}
+  .puck-chip-label{font:700 9px ui-sans-serif,system-ui;letter-spacing:1px;color:rgba(255,255,255,0.45);margin:0 2px 0 6px;}
+  .puck-context .puck-size{display:flex;align-items:center;gap:6px;min-width:110px;}
+  .puck-context .puck-size input{flex:1;min-width:70px;}
+  .puck-context .puck-size-val{font:600 11px 'JetBrains Mono',monospace;color:#e8e4de;min-width:22px;}
+
+  .host-save-status{display:flex;align-items:center;gap:8px;font:700 10px ui-sans-serif,system-ui;letter-spacing:0.6px;text-transform:uppercase;padding:6px 10px;border-radius:999px;background:#fff;color:#1c1a18;border:1px solid rgba(28,26,24,0.08);margin-right:8px;max-width:min(46vw,420px);}
+  .host-save-status.is-error{color:#a02835;box-shadow:0 0 0 3px rgba(160,40,53,0.12);}
+  .host-save-status.is-saving{color:#6b6560;}
+  .host-save-status.is-saved{color:#15803d;}
+  .host-save-status .hss-actions{display:flex;gap:4px;}
+  .host-save-status .hss-btn{border:1px solid rgba(160,40,53,0.35);background:#fff;color:#a02835;font:700 9px ui-sans-serif,system-ui;letter-spacing:0.4px;text-transform:uppercase;padding:4px 8px;border-radius:999px;cursor:pointer;}
+  .host-save-status .hss-btn:hover{background:#a02835;color:#fff;}
+  .host-save-status[hidden]{display:none!important;}
 
   /* DIM CHAIN */
   .dim-ext{stroke:#1d4ed8;stroke-width:1.5;}

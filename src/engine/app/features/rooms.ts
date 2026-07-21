@@ -58,12 +58,12 @@ export function initRooms() {
     const s = S.snapVertex(p);
     p = { x: s.x, y: s.y };
     if (s.snap) S.flashSnap(s.snap);
-    // Close if near first vertex
+    // Close if near first vertex (larger hit target for polygon / wall / area)
     if (state.polyPoints.length >= 3) {
       const first = state.polyPoints[0];
       const dx = p.x - first.x, dy = p.y - first.y;
       const screenDist = Math.sqrt(dx*dx+dy*dy) * state.zoom * state.baseZoom;
-      if (screenDist < 22) { S.closePoly(); return; }
+      if (screenDist < 28) { S.closePoly(); return; }
     }
     state.polyPoints.push({ x: p.x, y: p.y });
     S.refreshAreaOverlay();
@@ -120,25 +120,13 @@ export function initRooms() {
     const __b = S.vectorSnapshot();
     const wall: any = { pts, thickMM: state.wallThickMM, heightM: state.wallHeightM };
     S.ensureWallId(wall);
-    wall.name = 'Wall ' + ((state.walls || []).length + 1);
+    const n = (state.walls || []).length + 1;
+    const isClosed = !!(closed && pts.length >= 3 &&
+      pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y);
+    wall.name = isClosed ? ('Room ' + n) : ('Wall ' + n);
     state.walls.push(wall);
-    // Rasterize wall centerline onto the active layer (erasable like other ink)
-    const l = S.activeLayer();
-    if (l && l.ctx) {
-      l.ctx.save();
-      l.ctx.globalCompositeOperation = 'source-over';
-      l.ctx.globalAlpha = state.alpha;
-      l.ctx.strokeStyle = state.color;
-      l.ctx.lineWidth = Math.max(1, state.size);
-      l.ctx.lineCap = 'round';
-      l.ctx.lineJoin = 'round';
-      l.ctx.beginPath();
-      l.ctx.moveTo(pts[0].x, pts[0].y);
-      for (let i = 1; i < pts.length; i++) l.ctx.lineTo(pts[i].x, pts[i].y);
-      l.ctx.stroke();
-      l.ctx.restore();
-      S.saveSnapshot(l);
-    }
+    // Vector-only: do not bake a centerline onto the sketch canvas — that line
+    // ghosts when the wall is moved or its layer visibility is toggled off.
     state.polyPoints = [];
     state.polyActive = false;
     $el('poly-hint').style.display = 'none';
@@ -158,40 +146,29 @@ export function initRooms() {
     S.refreshMeasurements();
   }
 
-  // Commit the in-progress polygon as ink on the active layer.
+  // Commit the in-progress polygon as a vector entity (SVG overlay).
   // closed=true → closed polygon (fill/extrude-ready); false → open polyline.
+  // Do NOT bake onto the sketch canvas — baked ink ghosts when the vector moves.
   S.commitPolygonShape = function commitPolygonShape(closed: any) {
     const pts = state.polyPoints.slice();
     if (pts.length < 2) { S.cancelPoly(); return; }
     const isPolygon = closed && pts.length >= 3;
-    const entity = { kind: 'polygon', pts: pts.map((p: any) => ({ x: p.x, y: p.y })), closed: !!closed, stroke: state.color, width: Math.max(0.5, state.size) };
+    const entity: any = { kind: 'polygon', pts: pts.map((p: any) => ({ x: p.x, y: p.y })), closed: !!closed, stroke: state.color, width: Math.max(0.5, state.size) };
     const __b = S.vectorSnapshot(); S.pushShapeEntity(entity); S.recordVec(__b); S.scheduleAutosave();
-    // Rasterize onto the active layer so eraser and partial edits work
-    const l = S.activeLayer();
-    l.ctx.save();
-    l.ctx.globalCompositeOperation = 'source-over';
-    l.ctx.globalAlpha = state.alpha;
-    l.ctx.strokeStyle = state.color;
-    l.ctx.lineWidth = Math.max(0.5, state.size);
-    l.ctx.lineCap = 'round';
-    l.ctx.lineJoin = 'round';
-    l.ctx.beginPath();
-    l.ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) l.ctx.lineTo(pts[i].x, pts[i].y);
-    if (isPolygon) l.ctx.closePath();
-    l.ctx.stroke();
-    l.ctx.restore();
-    S.saveSnapshot(l);
     state.polyPoints = [];
     state.polyActive = false;
     const ph = $el('poly-hint');
     if (ph) ph.style.display = 'none';
     S.refreshMeasurements();
     S.renderLayers();
+    if (entity.id && typeof S.selectShapeById === 'function') {
+      S.selectShapeById(entity.id, 'programmatic');
+    }
     if (isPolygon && typeof S.onShapeCommitted === 'function') {
       S.onShapeCommitted({ kind: 'polygon', pts }, state._lastPolyClient);
     }
-    S.showHint(isPolygon ? 'Polygon placed' : 'Line placed');
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
+    S.showHint(isPolygon ? 'Polygon placed — drag to move' : 'Line placed — drag to move');
   }
 
   S.shoelaceArea = function shoelaceArea(pts: any) {
@@ -400,6 +377,17 @@ export function initRooms() {
     S._ovLine(J0.x - px*g, J0.y - py*g, J1.x - px*g, J1.y - py*g, '#4a6b8a', 1);
   }
 
+  /** Whether a room wall segment should draw (LayerEngine per-face visibility). */
+  S.isWallSegmentVisible = function isWallSegmentVisible(wall: any, seg: any) {
+    if (!wall || wall.visible === false) return false;
+    if (!S.layerEngine || !wall.id) return true;
+    const face = S.findEngineObjectByLegacy(
+      (r: any) => r.kind === 'wall-face' && r.wallId === wall.id && r.seg === seg,
+    );
+    if (!face) return true;
+    return S.layerEngine.isEffectivelyVisible(face.id);
+  };
+
   // Render one wall: poché + double-lines, broken at openings, with door/window symbols.
   S.renderOneWall = function renderOneWall(w: any, svgns: any, wi: any) {
     const pts = w.pts;
@@ -409,10 +397,14 @@ export function initRooms() {
     const closed = n > 2 && pts[0].x === pts[n - 1].x && pts[0].y === pts[n - 1].y;
     const segs = n - 1;
     const ppm = S.pxPerMetre();
-    const selW = state.sel && state.sel.type === 'wall' && state.sel.wi === wi;
-    const wFill = selW ? 'rgba(160,40,53,0.32)' : 'rgba(48,48,52,0.82)';
-    const wcol = selW ? '#a02835' : '#161616';
+    const wallSelected = state.sel && state.sel.type === 'wall' && state.sel.wi === wi;
+    const selSeg = wallSelected ? state.sel.seg : undefined;
     for (let i = 0; i < segs; i++) {
+      if (!S.isWallSegmentVisible(w, i)) continue;
+      // Highlight only the selected face when a segment is active; whole room if Room is selected.
+      const selThis = wallSelected && (typeof selSeg !== 'number' || selSeg === i);
+      const wFill = selThis ? 'rgba(160,40,53,0.32)' : 'rgba(48,48,52,0.82)';
+      const wcol = selThis ? '#a02835' : '#161616';
       const a = pts[i], b = pts[i + 1];
       const dx = b.x - a.x, dy = b.y - a.y, segLen = Math.hypot(dx, dy) || 1e-6;
       const ux = dx / segLen, uy = dy / segLen, px = -uy, py = ux;
@@ -455,11 +447,18 @@ export function initRooms() {
   S.renderShapes2D = function renderShapes2D() {
     const svgns = 'http://www.w3.org/2000/svg';
     (state.shapes || []).forEach((sh: any, si: any) => {
+      if (sh.visible === false) return;
+      const engObj = (S.layerEngine && sh.id && typeof S.findEngineObjectByLegacy === 'function')
+        ? S.findEngineObjectByLegacy((r: any) => r.kind === 'shape' && r.id === sh.id)
+        : null;
+      if (engObj && engObj.visible === false) return;
       const selSh = state.sel && state.sel.type === 'shape' && (
         state.sel.idx === si || (state.sel.id && sh.id && state.sel.id === sh.id)
       );
       const stroke = selSh ? '#a02835' : (sh.stroke || '#1c1a18');
       const w = sh.width || 2;
+      const shapeOpacity = typeof sh.opacity === 'number' ? sh.opacity
+        : (engObj && typeof engObj.opacity === 'number' ? engObj.opacity : 1);
       const clipId = 'shclip_' + si;
       if (sh.bgImage) {
         // Background image clipped to shape bounds
@@ -500,6 +499,7 @@ export function initRooms() {
         el.setAttribute('cx', String(sh.cx)); el.setAttribute('cy', String(sh.cy));
         el.setAttribute('rx', String(sh.rx)); el.setAttribute('ry', String(sh.ry));
         el.setAttribute('fill', 'none'); el.setAttribute('stroke', stroke); el.setAttribute('stroke-width', String(w));
+        el.setAttribute('opacity', String(shapeOpacity));
         S.rulerOverlay.appendChild(el);
       } else {
         const pts = sh.pts || []; if (pts.length < 2) return;
@@ -508,6 +508,7 @@ export function initRooms() {
         el.setAttribute('points', pts.map((p: any) => `${p.x},${p.y}`).join(' '));
         el.setAttribute('fill', 'none'); el.setAttribute('stroke', stroke); el.setAttribute('stroke-width', String(w));
         el.setAttribute('stroke-linejoin', 'round'); el.setAttribute('stroke-linecap', 'round');
+        el.setAttribute('opacity', String(shapeOpacity));
         S.rulerOverlay.appendChild(el);
       }
     });
@@ -517,55 +518,110 @@ export function initRooms() {
     if (state.wallsVisible === false) return;
     if (!state.walls || !state.walls.length) return;
     const svgns = S._SVGNS;
-    state.walls.forEach((w: any, wi: any) => S.renderOneWall(w, svgns, wi));
+    state.walls.forEach((w: any, wi: any) => {
+      if (w.visible === false) return;
+      S.renderOneWall(w, svgns, wi);
+    });
   }
 
   // Rebuild extruded wall masses from the 2D walls (carrying openings) so they appear & cut in 3D.
   // Face features added in 3D (push/pull regions, sketches, materials) are preserved across the
   // rebuild, keyed by wall:segment, so a 2D↔3D round-trip or a reload doesn't wipe them.
+  /** True when a mass footprint matches a wall-segment poly (catches duplicates that lost _fromWall). */
+  S.massPolyMatchesWallSeg = function massPolyMatchesWallSeg(poly: any, expected: any, tol: any = 0.04) {
+    if (!poly || !expected || poly.length !== expected.length) return false;
+    const used = new Array(expected.length).fill(false);
+    for (let i = 0; i < poly.length; i++) {
+      let hit = -1;
+      for (let j = 0; j < expected.length; j++) {
+        if (used[j]) continue;
+        if (Math.hypot(poly[i].x - expected[j].x, (poly[i].z ?? 0) - (expected[j].z ?? 0)) <= tol) {
+          hit = j; break;
+        }
+      }
+      if (hit < 0) return false;
+      used[hit] = true;
+    }
+    return true;
+  };
+
   S.syncWallsToMasses = function syncWallsToMasses() {
     if (typeof S.massing === 'undefined' || !S.massing.masses) return;
     const anchor = S.massing.baseAnchor || { px: S.doc.wPx / 2, py: S.doc.hPx / 2, ppm: S.pxPerMetre() };
     const ax = anchor.px, ay = anchor.py, ppm = anchor.ppm || S.pxPerMetre();
     const saved: any = {};
     S.massing.masses.forEach((m: any) => {
-      if (m._fromWall && m._wallKey) saved[m._wallKey] = { faceRegions: m.faceRegions, faceArt: m.faceArt, faceMat: m.faceMat, _faceImg: m._faceImg };
-    });
-    S.massing.masses = S.massing.masses.filter((m: any) => !m._fromWall);
-    (state.walls || []).forEach((w: any, wi: any) => {
-      const tW = (w.thickMM || 230) / 1000;
-      const pts = w.pts;
-      for (let i = 0; i < pts.length - 1; i++) {
-        const a = { x: (pts[i].x - ax) / ppm, z: (pts[i].y - ay) / ppm };
-        const b = { x: (pts[i + 1].x - ax) / ppm, z: (pts[i + 1].y - ay) / ppm };
-        const mass: any = { poly: S.wallSegPoly(a, b, tW), h: (w.heightM || 3), _wall: true, _fromWall: true, _wallKey: wi + ':' + i };
-        const segOps = (w.openings || []).filter((o: any) => o.seg === i);
-        if (segOps.length) {
-          const segLenW = Math.hypot(b.x - a.x, b.z - a.z), massLen = segLenW + tW;
-          mass.openings = segOps.map((o: any) => {
-            const u = Math.min(0.97, Math.max(0.03, (o.t * segLenW + tW / 2) / massLen));
-            return { kind: o.kind, u, w: o.wMM / 1000, h: o.hMM / 1000, sill: o.sillMM / 1000 };
-          });
-        }
-        const sv = saved[mass._wallKey];
-        if (sv) {                                  // re-attach 3D face features to the same wall segment
-          if (sv.faceRegions) mass.faceRegions = sv.faceRegions;
-          if (sv.faceArt) mass.faceArt = sv.faceArt;
-          if (sv.faceMat) mass.faceMat = sv.faceMat;
-          if (sv._faceImg) mass._faceImg = sv._faceImg;
-        }
-        S.massing.masses.push(mass);
+      if (m._fromWall && m._wallKey) {
+        saved[m._wallKey] = {
+          faceRegions: m.faceRegions, faceArt: m.faceArt, faceMat: m.faceMat, _faceImg: m._faceImg,
+        };
       }
     });
-  }
+
+    // Planned wall footprints to regenerate (and to cull stale duplicates against).
+    const planned: any[] = [];
+    (state.walls || []).forEach((w: any, wi: any) => {
+      if (w.visible === false) return;
+      const tW = (w.thickMM || 230) / 1000;
+      const pts = w.pts || [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (typeof S.isWallSegmentVisible === 'function' && !S.isWallSegmentVisible(w, i)) continue;
+        const a = { x: (pts[i].x - ax) / ppm, z: (pts[i].y - ay) / ppm };
+        const b = { x: (pts[i + 1].x - ax) / ppm, z: (pts[i + 1].y - ay) / ppm };
+        planned.push({
+          wi, seg: i, a, b, tW, h: (w.heightM || 3),
+          poly: S.wallSegPoly(a, b, tW),
+          openings: (w.openings || []).filter((o: any) => o.seg === i),
+          wallKey: wi + ':' + i,
+        });
+      }
+    });
+
+    // Drop regenerated walls + orphaned copies left after saves that stripped _fromWall/_wall.
+    S.massing.masses = S.massing.masses.filter((m: any) => {
+      if (m._fromWall) return false;
+      if (m._wall && m._wallKey) return false;
+      if (planned.length && m.poly && planned.some((p: any) => S.massPolyMatchesWallSeg(m.poly, p.poly))) {
+        return false;
+      }
+      return true;
+    });
+
+    planned.forEach((p: any) => {
+      const mass: any = {
+        poly: p.poly,
+        h: p.h,
+        _wall: true,
+        _fromWall: true,
+        _wallKey: p.wallKey,
+      };
+      if (p.openings && p.openings.length) {
+        const segLenW = Math.hypot(p.b.x - p.a.x, p.b.z - p.a.z), massLen = segLenW + p.tW;
+        mass.openings = p.openings.map((o: any) => {
+          const u = Math.min(0.97, Math.max(0.03, (o.t * segLenW + p.tW / 2) / massLen));
+          return { kind: o.kind, u, w: o.wMM / 1000, h: o.hMM / 1000, sill: o.sillMM / 1000 };
+        });
+      }
+      const sv = saved[p.wallKey];
+      if (sv) {
+        if (sv.faceRegions) mass.faceRegions = sv.faceRegions;
+        if (sv.faceArt) mass.faceArt = sv.faceArt;
+        if (sv.faceMat) mass.faceMat = sv.faceMat;
+        if (sv._faceImg) mass._faceImg = sv._faceImg;
+      }
+      S.massing.masses.push(mass);
+    });
+  };
 
   // ---- placing / selecting / sliding openings on 2D walls ----
   S.wallSegHit = function wallSegHit(p: any) {
     if (state.wallsVisible === false) return null;
     let best: any = null;
     (state.walls || []).forEach((w: any, wi: any) => {
+      if (w.visible === false) return;
       const tPx = S.wallThickPx(w);
       for (let i = 0; i < w.pts.length - 1; i++) {
+        if (typeof S.isWallSegmentVisible === 'function' && !S.isWallSegmentVisible(w, i)) continue;
         const a = w.pts[i], b = w.pts[i + 1];
         const dx = b.x - a.x, dy = b.y - a.y, len2 = dx*dx + dy*dy || 1;
         let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2; t = Math.max(0, Math.min(1, t));
@@ -646,11 +702,9 @@ export function initRooms() {
   }
   S.showWall2dPalette = function showWall2dPalette(show: any) {
     S.ensureWall2dPalette();
-    S._wall2dPaletteEl.style.display = show ? 'flex' : 'none';
-    if (show) {
-      (S._wall2dPaletteEl.querySelector as any)('#w2-thick').value = state.wallThickMM;
-      (S._wall2dPaletteEl.querySelector as any)('#w2-height').value = state.wallHeightM;
-    }
+    // Controls live in the bottom tool options bar now.
+    S._wall2dPaletteEl.style.display = 'none';
+    if (show && typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
   }
 
   S._openPaletteEl = null;
@@ -682,8 +736,12 @@ export function initRooms() {
   }
   S.showOpeningPalette = function showOpeningPalette(show: any) {
     S.ensureOpeningPalette();
-    S._openPaletteEl.style.display = show ? 'flex' : 'none';
-    if (show) S.updateOpeningPalette();
+    // Controls live in the bottom tool options bar now.
+    S._openPaletteEl.style.display = 'none';
+    if (show) {
+      S.updateOpeningPalette();
+      if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
+    }
   }
   S.updateOpeningPalette = function updateOpeningPalette() {
     if (!S._openPaletteEl) return;
@@ -732,11 +790,24 @@ export function initRooms() {
     }
     const wh = S.wallSegHit(p);
     if (wh) {
-      state.sel = { type: 'wall', wi: wh.wi }; state.selOpening2D = null;
+      const wall = state.walls[wh.wi];
+      if (wall) S.ensureWallId(wall);
+      state.sel = {
+        type: 'wall',
+        wi: wh.wi,
+        seg: typeof wh.seg === 'number' ? wh.seg : null,
+        id: wall && wall.id,
+      };
+      state.selOpening2D = null;
       S.showOpeningPalette(false); S.showSelectBar('wall');
       S.syncSelectionManagerFromLegacy('canvas');
       S.refreshMeasurements();
-      S.showHint('Wall selected — edit thickness / height or delete'); return true;
+      S.showHint(
+        typeof wh.seg === 'number' && S.isWallClosedLoop && S.isWallClosedLoop(wall)
+          ? ('Wall ' + (wh.seg + 1) + ' selected — Move / Scale / Rotate this side')
+          : 'Wall selected — edit thickness / height or delete',
+      );
+      return true;
     }
     for (let i = (state.shapes || []).length - 1; i >= 0; i--) {
       if (S.shapeHit(state.shapes[i], p)) {
@@ -770,6 +841,7 @@ export function initRooms() {
   S.deleteWall = function deleteWall(wi: any) {
     if (!state.walls || !state.walls[wi]) return;
     const __b = S.vectorSnapshot();
+    if (typeof S.eraseWallRasterInk === 'function') S.eraseWallRasterInk(state.walls[wi]);
     state.walls.splice(wi, 1);
     state.sel = null; state.selOpening2D = null;
     state._panelSelectedObjectId = null;
@@ -792,7 +864,18 @@ export function initRooms() {
   S.showSelectBar = function showSelectBar(type: any) {
     S.ensureSelectBar();
     const el = S._selBarEl, sel = state.sel;
-    if (!type || type === 'opening' || !sel) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    // Prefer bottom tool options bar for shape/wall transforms.
+    el.style.display = 'none';
+    if (!type || type === 'opening' || !sel) {
+      el.innerHTML = '';
+      if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
+      return;
+    }
+    if ((type === 'shape' || type === 'wall' || type === 'element') && typeof S.syncToolOptionsBar === 'function') {
+      el.innerHTML = '';
+      S.syncToolOptionsBar();
+      return;
+    }
     const inp = 'font-family:inherit;font-size:11px;padding:3px 5px;border:1px solid #ccc;border-radius:5px;';
     const tag = (t: any) => `<span style="font-weight:700;letter-spacing:0.5px;color:#a02835;">${t}</span>`;
     if (type === 'wall') {
@@ -897,12 +980,24 @@ export function initRooms() {
       l.setAttribute('class', 'area-edge');
       S.rulerOverlay.appendChild(l);
     }
-    // Vertices
+    // Vertices — brand-red dots (first vertex is the close target; kept compact)
+    const scale = Math.max(0.5, 1 / ((state.zoom || 1) * (state.baseZoom || 1)));
     pts.forEach((p: any, i: any) => {
+      const isFirst = i === 0;
+      const canClose = isFirst && pts.length >= 3;
+      const r = (canClose ? 8 : isFirst ? 7 : 5.5) * scale;
+      if (canClose) {
+        const ring = document.createElementNS(svgns, 'circle');
+        ring.setAttribute('cx', String(p.x)); ring.setAttribute('cy', String(p.y));
+        ring.setAttribute('r', String(r * 1.55));
+        ring.setAttribute('class', 'area-vertex-close-ring');
+        S.rulerOverlay.appendChild(ring);
+      }
       const c = document.createElementNS(svgns, 'circle');
-      c.setAttribute('cx', String(p.x)); c.setAttribute('cy', String(p.y)); c.setAttribute('r', String(i === 0 ? 14 : 9));
-      c.setAttribute('class', 'area-vertex');
-      if (i === 0) { c.style.cursor = 'pointer'; }
+      c.setAttribute('cx', String(p.x)); c.setAttribute('cy', String(p.y));
+      c.setAttribute('r', String(r));
+      c.setAttribute('class', 'area-vertex' + (isFirst ? ' area-vertex-first' : '') + (canClose ? ' area-vertex-close' : ''));
+      if (isFirst) c.style.cursor = 'pointer';
       S.rulerOverlay.appendChild(c);
     });
     // Live area (only for the area-measure tool, not the polygon shape tool)

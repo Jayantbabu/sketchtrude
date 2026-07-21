@@ -93,18 +93,24 @@ export function initToolUi() {
       $el('poly-hint').style.display = 'none';
       S.refreshMeasurements();
     }
-    S.showWall2dPalette(tool === 'wall');
-    S.showOpeningPalette(tool === 'opening');
+    // Top floating palettes are replaced by the bottom tool options bar.
+    if (typeof S.showWall2dPalette === 'function') S.showWall2dPalette(false);
+    if (typeof S.showOpeningPalette === 'function') S.showOpeningPalette(false);
     if (tool !== 'opening') { state.selOpening2D = null; }
-    else S.updateOpeningPalette();
-    const _hadSel = !!state.sel; state.sel = null;
-    S.syncSelectionManagerFromLegacy('programmatic');
-    if (typeof S.showSelectBar === 'function') S.showSelectBar(null);
+    else if (typeof S.updateOpeningPalette === 'function') S.updateOpeningPalette();
+    const preserveSel = !!state._preserveSelOnSetTool;
+    const _hadSel = !!state.sel;
+    if (!preserveSel) {
+      state.sel = null;
+      S.syncSelectionManagerFromLegacy('programmatic');
+      if (typeof S.showSelectBar === 'function') S.showSelectBar(null);
+    }
     if (tool !== 'offset' && state.offset) { state.offset = null; if (typeof S.showOffsetBar === 'function') S.showOffsetBar(false); }
-    if (_hadSel && typeof S.refreshMeasurements === 'function') S.refreshMeasurements();
+    if (_hadSel && !preserveSel && typeof S.refreshMeasurements === 'function') S.refreshMeasurements();
     S.highlightRailGroups();
     S.updatePreview();
     S.updateLayerOrder();
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
   }
 
   S.setActiveBrush = function setActiveBrush(brush: any) {
@@ -1109,6 +1115,152 @@ export function initToolUi() {
     $el('stencil-rot-val').textContent = Math.round(state.stencilRotation) + '°';
   });
 
+  /** Bottom-center context options for shapes / wall / measure / region / selection. */
+  S.syncToolOptionsBar = function syncToolOptionsBar() {
+    const ctx = $el('puck-context');
+    const drawCtrls = $el('puck-draw-controls');
+    const nameEl = $el('puck-name');
+    if (!ctx || !drawCtrls) return;
+
+    const chip = (label: string, on: boolean, fn: () => void) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'puck-chip' + (on ? ' on' : '');
+      b.textContent = label;
+      b.addEventListener('click', (e: any) => { e.stopPropagation(); fn(); });
+      return b;
+    };
+    const label = (t: string) => {
+      const s = document.createElement('span');
+      s.className = 'puck-chip-label';
+      s.textContent = t;
+      return s;
+    };
+    const numField = (id: string, val: number, min: number, max: number, step: number, onInput: (v: number) => void) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'puck-size';
+      const inp = document.createElement('input');
+      inp.type = 'number';
+      inp.id = id;
+      inp.min = String(min); inp.max = String(max); inp.step = String(step);
+      inp.value = String(val);
+      inp.style.cssText = 'width:56px;font:600 11px ui-sans-serif,system-ui;padding:4px 6px;border-radius:6px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.08);color:#e8e4de;';
+      inp.addEventListener('input', () => {
+        const v = parseFloat(inp.value);
+        if (Number.isFinite(v)) onInput(v);
+      });
+      wrap.appendChild(inp);
+      return wrap;
+    };
+
+    const tool = state.tool;
+    const group = S._groupOf ? S._groupOf(tool) : null;
+    const sel: any = state.sel;
+    ctx.innerHTML = '';
+
+    // Selection transforms take priority in the bottom bar
+    if (sel && (sel.type === 'shape' || sel.type === 'wall')) {
+      drawCtrls.style.display = 'none';
+      ctx.style.display = 'flex';
+      if (nameEl) nameEl.textContent = sel.type === 'shape' ? 'SHAPE' : 'WALL';
+      ctx.appendChild(chip('Move', false, () => S.beginVecXform('move')));
+      ctx.appendChild(chip('Scale', false, () => S.beginVecXform('scale')));
+      ctx.appendChild(chip('Rotate', false, () => S.beginVecXform('rotate')));
+      ctx.appendChild(chip('Delete', false, () => S.deleteSelectedElement()));
+      if (sel.type === 'shape' && state.shapes[sel.idx]) {
+        const sh = state.shapes[sel.idx];
+        ctx.appendChild(label('LINE'));
+        ctx.appendChild(numField('puck-shape-w', sh.width || 2, 0.5, 40, 0.5, (v) => {
+          const __b = S.vectorSnapshot(); sh.width = v; S.refreshMeasurements(); S.recordVec(__b, true); S.scheduleAutosave();
+        }));
+      }
+      return;
+    }
+
+    if (group && group.id === 'shapes') {
+      drawCtrls.style.display = 'none';
+      ctx.style.display = 'flex';
+      if (nameEl) nameEl.textContent = 'SHAPES';
+      ctx.appendChild(chip('Polygon', tool === 'line', () => S.setTool('line')));
+      ctx.appendChild(chip('Rectangle', tool === 'rect', () => S.setTool('rect')));
+      ctx.appendChild(chip('Circle', tool === 'circle', () => S.setTool('circle')));
+      ctx.appendChild(label('BORDER'));
+      const sizeWrap = document.createElement('div');
+      sizeWrap.className = 'puck-size';
+      const sizeInp = document.createElement('input');
+      sizeInp.type = 'range'; sizeInp.min = '0.5'; sizeInp.max = '24'; sizeInp.step = '0.5';
+      sizeInp.value = String(state.size || 2);
+      const sizeVal = document.createElement('div');
+      sizeVal.className = 'puck-size-val';
+      sizeVal.textContent = String(state.size || 2);
+      sizeInp.addEventListener('input', () => {
+        state.size = parseFloat(sizeInp.value);
+        sizeVal.textContent = String(state.size);
+        if (typeof S.updatePreview === 'function') S.updatePreview();
+      });
+      sizeWrap.appendChild(sizeInp); sizeWrap.appendChild(sizeVal);
+      ctx.appendChild(sizeWrap);
+      const colorBtn = document.createElement('div');
+      colorBtn.className = 'puck-color';
+      colorBtn.style.background = state.color || '#0a0a0a';
+      colorBtn.style.width = '28px'; colorBtn.style.height = '28px';
+      colorBtn.style.borderRadius = '50%'; colorBtn.style.cursor = 'pointer';
+      colorBtn.addEventListener('click', () => $el('puck-color')?.click());
+      ctx.appendChild(colorBtn);
+      return;
+    }
+
+    if (group && group.id === 'build') {
+      drawCtrls.style.display = 'none';
+      ctx.style.display = 'flex';
+      if (nameEl) nameEl.textContent = tool === 'opening' ? 'OPENING' : 'WALL';
+      ctx.appendChild(chip('Wall', tool === 'wall', () => S.setTool('wall')));
+      ctx.appendChild(chip('Door', tool === 'opening' && state.openingKind === 'door', () => {
+        state.openingKind = 'door';
+        if (tool !== 'opening') S.setTool('opening');
+        else S.syncToolOptionsBar();
+      }));
+      ctx.appendChild(chip('Window', tool === 'opening' && state.openingKind === 'window', () => {
+        state.openingKind = 'window';
+        if (tool !== 'opening') S.setTool('opening');
+        else S.syncToolOptionsBar();
+      }));
+      if (tool === 'wall') {
+        ctx.appendChild(label('THICK'));
+        ctx.appendChild(numField('puck-wall-thick', state.wallThickMM || 230, 50, 600, 10, (v) => { state.wallThickMM = v; }));
+        ctx.appendChild(label('H'));
+        ctx.appendChild(numField('puck-wall-h', state.wallHeightM || 3, 0.5, 20, 0.1, (v) => { state.wallHeightM = v; }));
+      }
+      return;
+    }
+
+    if (group && group.id === 'measure') {
+      drawCtrls.style.display = 'none';
+      ctx.style.display = 'flex';
+      if (nameEl) nameEl.textContent = 'MEASURE';
+      ctx.appendChild(chip('Ruler', tool === 'ruler', () => S.setTool('ruler')));
+      ctx.appendChild(chip('Area', tool === 'area', () => S.setTool('area')));
+      return;
+    }
+
+    if (group && group.id === 'region') {
+      drawCtrls.style.display = 'none';
+      ctx.style.display = 'flex';
+      if (nameEl) nameEl.textContent = 'REGION';
+      ctx.appendChild(chip('Lasso', tool === 'lasso', () => S.setTool('lasso')));
+      ctx.appendChild(chip('Wand', tool === 'wand', () => S.setTool('wand')));
+      return;
+    }
+
+    // Draw / pen / default — restore SIZE/OPACITY/STAB
+    ctx.style.display = 'none';
+    drawCtrls.style.display = '';
+    if (nameEl && state.activeBrush && state.activeBrush.name) {
+      nameEl.textContent = String(state.activeBrush.name).toUpperCase();
+    }
+  };
+
   initColor();
   initFill();
+  if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
 }

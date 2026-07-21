@@ -172,6 +172,12 @@ export type LayerNode = {
   metadata?: Record<string, unknown>;
 };
 
+/** Bridge from LayerEngine objects back to legacy `state.shapes` / `state.walls`. */
+export type LegacyObjectRef =
+  | { kind: "shape"; id: string }
+  | { kind: "wall"; id: string }
+  | { kind: "wall-face"; wallId: string; seg: number };
+
 export type SceneObjectType =
   | "group"
   | "sketch-stroke"
@@ -221,6 +227,8 @@ export type SceneObjectNode = {
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown>;
+  /** Links this engine object to a legacy wall/shape entity. */
+  legacyRef?: LegacyObjectRef;
 };
 
 export type LayerPanelRow = {
@@ -236,6 +244,7 @@ export type LayerPanelRow = {
   expanded: boolean;
   hasChildren: boolean;
   parentId: string | null;
+  legacyRef?: LegacyObjectRef;
 };
 
 export type SnapResult = {

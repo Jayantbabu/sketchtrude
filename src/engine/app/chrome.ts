@@ -45,8 +45,58 @@ export function initChrome() {
   }
 
   /* =================== LAYER PANEL CONTROLS =================== */
+  S.syncActivePanelControls = function syncActivePanelControls() {
+    const sizeRow = $el('shape-size-row');
+    const sizeInp = $el('shape-size');
+    const sizeVal = $el('shape-size-val');
+    const sel: any = state.sel;
+    const panelObj = S.layerEngine && state._panelSelectedObjectId
+      ? S.layerEngine.getObject(state._panelSelectedObjectId)
+      : null;
+    const shapeSel = sel && sel.type === 'shape' ? state.shapes[sel.idx]
+      : (panelObj && panelObj.legacyRef && panelObj.legacyRef.kind === 'shape'
+        ? (state.shapes || []).find((s: any) => s && s.id === panelObj.legacyRef.id)
+        : null);
+    if (sizeRow) sizeRow.style.display = shapeSel ? 'flex' : 'none';
+    if (shapeSel) {
+      const op = typeof shapeSel.opacity === 'number' ? shapeSel.opacity
+        : (panelObj && typeof panelObj.opacity === 'number' ? panelObj.opacity : 1);
+      $el('layer-opacity').value = Math.round(op * 100);
+      $el('layer-opacity-val').textContent = Math.round(op * 100) + '%';
+      if (sizeInp) sizeInp.value = '100';
+      if (sizeVal) sizeVal.textContent = '100%';
+    }
+  };
+
   $el('layer-opacity').addEventListener('input', (e: any) => {
     const v = parseInt(e.target.value) / 100;
+    const sel: any = state.sel;
+    const panelObj = S.layerEngine && state._panelSelectedObjectId
+      ? S.layerEngine.getObject(state._panelSelectedObjectId)
+      : null;
+    // Prefer selected shape / panel object opacity when an object is active.
+    if (sel && sel.type === 'shape' && state.shapes[sel.idx]) {
+      state.shapes[sel.idx].opacity = v;
+      if (panelObj && panelObj.legacyRef && panelObj.legacyRef.kind === 'shape') {
+        S.layerEngine.setObjectOpacity(panelObj.id, v);
+      } else if (state.shapes[sel.idx].id && typeof S.findEngineObjectByLegacy === 'function') {
+        const eng = S.findEngineObjectByLegacy((r: any) => r.kind === 'shape' && r.id === state.shapes[sel.idx].id);
+        if (eng) S.layerEngine.setObjectOpacity(eng.id, v);
+      }
+      $el('layer-opacity-val').textContent = e.target.value + '%';
+      S.refreshMeasurements();
+      S.scheduleAutosave();
+      return;
+    }
+    if (panelObj && panelObj.legacyRef && panelObj.legacyRef.kind === 'shape') {
+      S.layerEngine.setObjectOpacity(panelObj.id, v);
+      const sh = (state.shapes || []).find((s: any) => s && s.id === panelObj.legacyRef.id);
+      if (sh) sh.opacity = v;
+      $el('layer-opacity-val').textContent = e.target.value + '%';
+      S.refreshMeasurements();
+      S.scheduleAutosave();
+      return;
+    }
     const l = S.activeLayer();
     if (!l) return;
     l.opacity = v;
@@ -55,6 +105,59 @@ export function initChrome() {
     $el('layer-opacity-val').textContent = e.target.value + '%';
     S.renderLayers();
   });
+
+  const shapeSizeEl = $el('shape-size');
+  if (shapeSizeEl) {
+    shapeSizeEl.addEventListener('input', (e: any) => {
+      const pct = parseInt(e.target.value, 10);
+      $el('shape-size-val').textContent = pct + '%';
+      const sel: any = state.sel;
+      let sh: any = sel && sel.type === 'shape' ? state.shapes[sel.idx] : null;
+      if (!sh && S.layerEngine && state._panelSelectedObjectId) {
+        const obj = S.layerEngine.getObject(state._panelSelectedObjectId);
+        if (obj && obj.legacyRef && obj.legacyRef.kind === 'shape') {
+          sh = (state.shapes || []).find((s: any) => s && s.id === obj.legacyRef.id) || null;
+          if (sh) {
+            const idx = state.shapes.indexOf(sh);
+            state.sel = { type: 'shape', idx, id: sh.id };
+          }
+        }
+      }
+      if (!sh) return;
+      const factor = pct / 100;
+      if (!sh._sizeBase) {
+        if (sh.kind === 'ellipse') {
+          sh._sizeBase = { rx: sh.rx, ry: sh.ry, cx: sh.cx, cy: sh.cy };
+        } else if (sh.pts) {
+          const cx = sh.pts.reduce((a: any, p: any) => a + p.x, 0) / sh.pts.length;
+          const cy = sh.pts.reduce((a: any, p: any) => a + p.y, 0) / sh.pts.length;
+          sh._sizeBase = { pts: sh.pts.map((p: any) => ({ x: p.x, y: p.y })), cx, cy };
+        }
+      }
+      const base: any = sh._sizeBase;
+      if (!base) return;
+      const __b = S.vectorSnapshot();
+      if (sh.kind === 'ellipse') {
+        sh.rx = base.rx * factor;
+        sh.ry = base.ry * factor;
+      } else if (base.pts) {
+        sh.pts = base.pts.map((p: any) => ({
+          x: base.cx + (p.x - base.cx) * factor,
+          y: base.cy + (p.y - base.cy) * factor,
+        }));
+      }
+      S.refreshMeasurements();
+      S.recordVec(__b, true);
+      S.scheduleAutosave();
+    });
+    shapeSizeEl.addEventListener('change', () => {
+      const sel: any = state.sel;
+      const sh = sel && sel.type === 'shape' ? state.shapes[sel.idx] : null;
+      if (sh) delete sh._sizeBase;
+      shapeSizeEl.value = '100';
+      $el('shape-size-val').textContent = '100%';
+    });
+  }
   $el('layer-trace').addEventListener('input', (e: any) => {
     const v = parseInt(e.target.value) / 100;
     const l = S.activeLayer();

@@ -19,6 +19,7 @@ import {
   type LayerKind,
   type LayerNode,
   type LayerPanelRow,
+  type LegacyObjectRef,
   type ObjectTransform,
   type SceneObjectNode,
   type SceneObjectType,
@@ -52,6 +53,7 @@ export type CreateObjectOptions = {
   locked?: boolean;
   opacity?: number;
   metadata?: Record<string, unknown>;
+  legacyRef?: LegacyObjectRef;
 };
 
 export type LayerEngineOptions = {
@@ -556,7 +558,7 @@ export class LayerEngine {
 
     const node: SceneObjectNode = {
       id,
-      kind: options.type === "group" ? "group" : "object",
+      kind: options.type === "group" || options.type === "room" ? "group" : "object",
       type: options.type,
       name: options.name ?? defaultObjectName(options.type),
       layerId: options.layerId,
@@ -581,6 +583,7 @@ export class LayerEngine {
       createdAt: stamp,
       updatedAt: stamp,
       metadata: options.metadata ? { ...options.metadata } : undefined,
+      legacyRef: options.legacyRef ? { ...options.legacyRef } : undefined,
     };
 
     this.objects[id] = node;
@@ -934,6 +937,7 @@ export class LayerEngine {
       expanded: false,
       hasChildren: obj.childIds.length > 0,
       parentId: obj.relations.hierarchyParentId ?? obj.layerId,
+      legacyRef: obj.legacyRef ? { ...obj.legacyRef } : undefined,
     });
     for (const childId of obj.childIds) {
       this.pushObjectRows(rows, childId, depth + 1);
@@ -1020,6 +1024,7 @@ export class LayerEngine {
       locked: src.locked,
       opacity: src.opacity,
       metadata: src.metadata ? { ...src.metadata } : undefined,
+      legacyRef: src.legacyRef ? { ...src.legacyRef } : undefined,
     });
     for (const childId of src.childIds) {
       const child = this.objects[childId];

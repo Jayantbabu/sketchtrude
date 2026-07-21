@@ -80,6 +80,13 @@ export function initState() {
     }
     return null;
   }
+  /** Closed loop wall (room): first point equals last. */
+  S.isWallClosedLoop = function isWallClosedLoop(wall: any) {
+    const pts = (wall && wall.pts) || [];
+    const n = pts.length;
+    return n > 2 && pts[0].x === pts[n - 1].x && pts[0].y === pts[n - 1].y;
+  };
+
   S.upsertEngineObject = function upsertEngineObject(opts: any) {
     if (!S.layerEngine) return null;
     const ref = opts.legacyRef;
@@ -93,6 +100,10 @@ export function initState() {
       });
     }
     if (existing) {
+      if (opts.type && existing.type !== opts.type) {
+        existing.type = opts.type;
+        existing.kind = (opts.type === 'group' || opts.type === 'room') ? 'group' : 'object';
+      }
       if (opts.name && existing.name !== opts.name) {
         S.layerEngine.renameObject(existing.id, opts.name);
       }
@@ -108,7 +119,9 @@ export function initState() {
       return existing.id;
     }
     return S.layerEngine.createObject(opts);
-  }
+  };
+
+  /** Open polyline → one WALL. Closed loop → ROOM with one WALL child per segment. */
   S.registerWallInLayerPanel = function registerWallInLayerPanel(wall: any) {
     if (!S.layerEngine || !wall) return;
     const mainId = S.ensureMainObjectLayer();
@@ -119,37 +132,49 @@ export function initState() {
     const pts = wall.pts || [];
     const segCount = Math.max(0, pts.length - 1);
     if (segCount <= 0) return;
+    const closed = S.isWallClosedLoop(wall);
 
-    let parentId = null;
-    if (segCount > 1) {
-      parentId = S.upsertEngineObject({
-        type: 'group',
-        name: wall.name || ('Wall ' + wallNum),
+    if (!closed) {
+      // Single wall entry for any open polyline (1+ segments) — no Face children.
+      if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+        wall.name = 'Wall ' + wallNum;
+      }
+      S.upsertEngineObject({
+        type: 'wall',
+        name: wall.name,
+        layerId: mainId,
+        legacyRef: { kind: 'wall', id: wall.id },
+        geometry: { pts, thickMM: wall.thickMM, heightM: wall.heightM },
+      });
+    } else {
+      if (!wall.name || /^Wall\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+        wall.name = 'Room ' + wallNum;
+      }
+      const parentId = S.upsertEngineObject({
+        type: 'room',
+        name: wall.name,
         layerId: mainId,
         legacyRef: { kind: 'wall', id: wall.id },
       });
-    }
-    for (let seg = 0; seg < segCount; seg++) {
-      const faceName = segCount === 1
-        ? (wall.name || ('Wall ' + wallNum))
-        : ('Face ' + (seg + 1));
-      S.upsertEngineObject({
-        type: 'wall',
-        name: faceName,
-        layerId: mainId,
-        parentObjectId: parentId || undefined,
-        legacyRef: { kind: 'wall-face', wallId: wall.id, seg },
-        geometry: {
-          a: { x: pts[seg].x, y: pts[seg].y },
-          b: { x: pts[seg + 1].x, y: pts[seg + 1].y },
-          thickMM: wall.thickMM,
-          heightM: wall.heightM,
-        },
-      });
+      for (let seg = 0; seg < segCount; seg++) {
+        S.upsertEngineObject({
+          type: 'wall',
+          name: 'Wall ' + (seg + 1),
+          layerId: mainId,
+          parentObjectId: parentId || undefined,
+          legacyRef: { kind: 'wall-face', wallId: wall.id, seg },
+          geometry: {
+            a: { x: pts[seg].x, y: pts[seg].y },
+            b: { x: pts[seg + 1].x, y: pts[seg + 1].y },
+            thickMM: wall.thickMM,
+            heightM: wall.heightM,
+          },
+        });
+      }
     }
     if (S.layerEngine.layers[mainId]) S.layerEngine.layers[mainId].expanded = true;
     S.renderLayers();
-  }
+  };
   S.registerShapeInLayerPanel = function registerShapeInLayerPanel(shape: any) {
     if (!S.layerEngine || !shape) return;
     const mainId = S.ensureMainObjectLayer();
@@ -177,23 +202,38 @@ export function initState() {
       const pts = wall.pts || [];
       const segCount = Math.max(0, pts.length - 1);
       if (segCount <= 0) return;
-      let parentId = null;
-      if (segCount > 1) {
-        parentId = S.upsertEngineObject({
-          type: 'group',
-          name: wall.name || ('Wall ' + (wallIndex + 1)),
-          layerId: mainId,
-          legacyRef: { kind: 'wall', id: wall.id },
-        });
-        if (parentId) wanted.add(parentId);
-      }
-      for (let seg = 0; seg < segCount; seg++) {
-        const faceName = segCount === 1
-          ? (wall.name || ('Wall ' + (wallIndex + 1)))
-          : ('Face ' + (seg + 1));
+      const closed = S.isWallClosedLoop(wall);
+      const wallNum = wallIndex + 1;
+
+      if (!closed) {
+        if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+          wall.name = 'Wall ' + wallNum;
+        }
         const oid = S.upsertEngineObject({
           type: 'wall',
-          name: faceName,
+          name: wall.name,
+          layerId: mainId,
+          legacyRef: { kind: 'wall', id: wall.id },
+          geometry: { pts, thickMM: wall.thickMM, heightM: wall.heightM },
+        });
+        if (oid) wanted.add(oid);
+        return;
+      }
+
+      if (!wall.name || /^Wall\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+        wall.name = 'Room ' + wallNum;
+      }
+      const parentId = S.upsertEngineObject({
+        type: 'room',
+        name: wall.name,
+        layerId: mainId,
+        legacyRef: { kind: 'wall', id: wall.id },
+      });
+      if (parentId) wanted.add(parentId);
+      for (let seg = 0; seg < segCount; seg++) {
+        const oid = S.upsertEngineObject({
+          type: 'wall',
+          name: 'Wall ' + (seg + 1),
           layerId: mainId,
           parentObjectId: parentId || undefined,
           legacyRef: { kind: 'wall-face', wallId: wall.id, seg },
@@ -274,6 +314,8 @@ export function initState() {
     if (typeof S.showSelectBar === 'function') S.showSelectBar('shape');
     S.syncSelectionManagerFromLegacy(source || 'layer-panel');
     if (typeof S.refreshMeasurements === 'function') S.refreshMeasurements();
+    if (typeof S.syncActivePanelControls === 'function') S.syncActivePanelControls();
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
     return true;
   }
   S.selectWallByLegacy = function selectWallByLegacy(wallId: any, seg: any, source: any) {
@@ -285,6 +327,8 @@ export function initState() {
     if (typeof S.showSelectBar === 'function') S.showSelectBar('wall');
     S.syncSelectionManagerFromLegacy(source || 'layer-panel');
     if (typeof S.refreshMeasurements === 'function') S.refreshMeasurements();
+    if (typeof S.syncActivePanelControls === 'function') S.syncActivePanelControls();
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
     return true;
   }
   /** Click a LayerEngine object row → select the matching wall face / shape. */
@@ -316,13 +360,15 @@ export function initState() {
     if (ref && ref.kind === 'wall') {
       return S.selectWallByLegacy(ref.id, null, 'layer-panel');
     }
-    // Group — select first child with a legacy ref
-    if (obj.type === 'group' && obj.childIds && obj.childIds.length) {
+    // Group / room without a whole-wall ref — select first child with a legacy ref
+    if ((obj.type === 'group' || obj.type === 'room') && obj.childIds && obj.childIds.length) {
       for (const cid of obj.childIds) {
         if (S.selectSceneObjectFromPanel(cid, { additive: false })) return true;
       }
     }
     if (typeof S.showSelectBar === 'function') S.showSelectBar('element');
+    if (typeof S.syncActivePanelControls === 'function') S.syncActivePanelControls();
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
     S.renderLayers();
     return true;
   }

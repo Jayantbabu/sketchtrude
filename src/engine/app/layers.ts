@@ -345,6 +345,10 @@ export function initLayers() {
       }
       state.selOpening2D = null;
       if (typeof S.showOpeningPalette === 'function') S.showOpeningPalette(false);
+      // Clear legacy baked centerlines so hiding walls doesn't leave a thin ghost stroke.
+      if (typeof S.eraseWallRasterInk === 'function') {
+        (state.walls || []).forEach((w: any) => S.eraseWallRasterInk(w));
+      }
     }
     S.refreshMeasurements();
     S.renderLayers();
@@ -428,9 +432,32 @@ export function initLayers() {
               const id = btn.dataset.id;
               if (action === 'obj-vis') {
                 const obj = S.layerEngine.getObject(id);
-                S.layerEngine.setObjectVisibility(id, !(obj && obj.visible));
+                const next = !(obj && obj.visible);
+                S.layerEngine.setObjectVisibility(id, next);
+                const ref = obj && obj.legacyRef;
+                if (ref && ref.kind === 'shape') {
+                  const sh = (state.shapes || []).find((s: any) => s && s.id === ref.id);
+                  if (sh) sh.visible = next;
+                }
+                if (ref && ref.kind === 'wall') {
+                  // Room / whole-wall toggle
+                  const w = (state.walls || []).find((x: any) => x && x.id === ref.id);
+                  if (w) {
+                    w.visible = next;
+                    if (!next && typeof S.eraseWallRasterInk === 'function') {
+                      S.eraseWallRasterInk(w);
+                    }
+                  }
+                }
+                // wall-face: LayerEngine visibility alone drives per-segment hide
+                // (do NOT flip the whole wall.visible — that hid the entire room).
+                if (ref && (ref.kind === 'wall' || ref.kind === 'wall-face')
+                  && typeof S.syncWallsToMasses === 'function') {
+                  S.syncWallsToMasses();
+                }
                 S.renderLayers();
                 S.refreshMeasurements();
+                S.scheduleAutosave();
                 return;
               }
               if (action === 'obj-menu') {
@@ -777,6 +804,28 @@ export function initLayers() {
 
   /* ---- Layer options menu ---- */
   S.layerMenuEl = null;
+  S._placeFixedMenu = function _placeFixedMenu(menu: any, anchor: any, preferredWidth: any) {
+    const mw = preferredWidth || 220;
+    menu.style.visibility = 'hidden';
+    menu.style.left = '0px';
+    menu.style.top = '0px';
+    const place = () => {
+      const r = anchor && anchor.getBoundingClientRect
+        ? anchor.getBoundingClientRect()
+        : { left: 8, right: 8 + mw, top: 8, bottom: 40, width: 0, height: 0 };
+      const degenerated = !r.width && !r.height;
+      let left = degenerated ? 8 : (r.right - mw);
+      if (left < 8) left = 8;
+      if (left + mw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - mw - 8);
+      let top = degenerated ? 48 : (r.bottom + 4);
+      const mh = menu.offsetHeight || 240;
+      if (top + mh > window.innerHeight - 8) top = Math.max(8, (degenerated ? 48 : r.top) - mh - 4);
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
+      menu.style.visibility = 'visible';
+    };
+    requestAnimationFrame(place);
+  }
   S.openLayerMenu = function openLayerMenu(idx: any, anchor: any) {
     S.closeLayerMenu();
     const items = [
@@ -800,15 +849,7 @@ export function initLayers() {
     });
     document.body.appendChild(menu);
     S.layerMenuEl = menu;
-    const r = anchor.getBoundingClientRect();
-    const mw = 210;
-    let left = r.right - mw;
-    if (left < 8) left = 8;
-    let top = r.bottom + 4;
-    // flip up if it would go off the bottom
-    if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 4;
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
+    S._placeFixedMenu(menu, anchor, 210);
     setTimeout(() => document.addEventListener('pointerdown', S.closeLayerMenuOnOutside, true), 0);
   }
   S.openElementMenu = function openElementMenu(objectId: any, anchor: any) {
@@ -838,14 +879,7 @@ export function initLayers() {
     });
     document.body.appendChild(menu);
     S.layerMenuEl = menu;
-    const r = anchor.getBoundingClientRect();
-    const mw = 220;
-    let left = r.right - mw;
-    if (left < 8) left = 8;
-    let top = r.bottom + 4;
-    if (top + menu.offsetHeight > window.innerHeight - 8) top = r.top - menu.offsetHeight - 4;
-    menu.style.left = left + 'px';
-    menu.style.top = top + 'px';
+    S._placeFixedMenu(menu, anchor, 220);
     setTimeout(() => document.addEventListener('pointerdown', S.closeLayerMenuOnOutside, true), 0);
   }
 
@@ -874,6 +908,7 @@ export function initLayers() {
       S.deleteWall(sel.wi);
       S.syncSceneObjectsToEngine();
       S.renderLayers();
+      if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
       return;
     }
     if (sel && sel.type === 'shape') {
@@ -887,11 +922,35 @@ export function initLayers() {
       S.recordVec(__b);
       S.scheduleAutosave();
       S.renderLayers();
+      if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
       return;
     }
     if (S.layerEngine && state._panelSelectedObjectId) {
       const obj = S.layerEngine.getObject(state._panelSelectedObjectId);
-      if (obj && obj.type === 'group' && !obj.legacyRef) {
+      if (!obj) return;
+      const ref = obj.legacyRef;
+      if (ref && ref.kind === 'shape') {
+        const idx = (state.shapes || []).findIndex((s: any) => s && s.id === ref.id);
+        if (idx >= 0) {
+          state.sel = { type: 'shape', idx, id: ref.id };
+          S.deleteSelectedElement();
+          return;
+        }
+      }
+      if (ref && ref.kind === 'wall') {
+        const wi = (state.walls || []).findIndex((w: any) => w && w.id === ref.id);
+        if (wi >= 0) {
+          S.deleteWall(wi);
+          S.syncSceneObjectsToEngine();
+          S.renderLayers();
+          return;
+        }
+      }
+      if (ref && ref.kind === 'wall-face') {
+        S.showHint('Hide this wall with the eye icon, or delete the Room to remove all walls');
+        return;
+      }
+      if ((obj.type === 'group' || obj.type === 'room') && !obj.legacyRef) {
         S.layerEngine.deleteObjects([obj.id]);
         state._panelSelectedObjectId = null;
         S.renderLayers();
@@ -901,20 +960,116 @@ export function initLayers() {
 
   /* ── Vector element transform (move / scale / rotate) ── */
   S.getSelectedVecEntity = function getSelectedVecEntity() {
-    const sel: any = state.sel;
+    const sel: any = state.sel || (state.vecXform && state.vecXform.sel) || null;
     if (!sel) return null;
-    if (sel.type === 'wall' && state.walls[sel.wi]) {
-      return { kind: 'wall', wall: state.walls[sel.wi], wi: sel.wi };
+    if (sel.type === 'wall') {
+      let wi = typeof sel.wi === 'number' ? sel.wi : -1;
+      if (wi < 0 && sel.id) wi = (state.walls || []).findIndex((w: any) => w && w.id === sel.id);
+      if (wi >= 0 && state.walls[wi]) {
+        const ent: any = { kind: 'wall', wall: state.walls[wi], wi };
+        if (typeof sel.seg === 'number') ent.seg = sel.seg;
+        return ent;
+      }
     }
-    if (sel.type === 'shape' && state.shapes[sel.idx]) {
-      return { kind: 'shape', shape: state.shapes[sel.idx], idx: sel.idx };
+    if (sel.type === 'shape') {
+      let idx = typeof sel.idx === 'number' ? sel.idx : -1;
+      if (idx < 0 && sel.id) idx = (state.shapes || []).findIndex((s: any) => s && s.id === sel.id);
+      if (idx >= 0 && state.shapes[idx]) return { kind: 'shape', shape: state.shapes[idx], idx };
     }
     return null;
   }
+
+  /** Write one segment's endpoints back into a wall polyline (keeps closed-loop seal). */
+  S.applyWallSegmentGeom = function applyWallSegmentGeom(wall: any, seg: any, a: any, b: any) {
+    if (!wall || typeof seg !== 'number') return;
+    const pts = (wall.pts || []).map((p: any) => ({ x: p.x, y: p.y }));
+    const n = pts.length;
+    if (seg < 0 || seg + 1 >= n) return;
+    const closed = n > 2 && pts[0].x === pts[n - 1].x && pts[0].y === pts[n - 1].y;
+    pts[seg] = { x: a.x, y: a.y };
+    pts[seg + 1] = { x: b.x, y: b.y };
+    if (closed) {
+      if (seg === 0) pts[n - 1] = { x: a.x, y: a.y };
+      if (seg + 1 === n - 1) {
+        pts[0] = { x: b.x, y: b.y };
+        pts[n - 1] = { x: b.x, y: b.y };
+      }
+    }
+    wall.pts = pts;
+  };
+
+  /** Erase previously baked raster ink for a vector shape so transforms don't leave ghosts. */
+  S.eraseShapeRasterInk = function eraseShapeRasterInk(shape: any, geom: any) {
+    if (!shape) return;
+    const layers = state.layers || [];
+    const width = Math.max(2, (shape.width || 2) + 4);
+    const g = geom || shape;
+    layers.forEach((layer: any) => {
+      if (!layer || !layer.ctx) return;
+      const ctx = layer.ctx;
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#000';
+      ctx.fillStyle = '#000';
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (shape.kind === 'ellipse' || (g.rx != null && g.ry != null)) {
+        const cx = g.cx, cy = g.cy, rx = g.rx, ry = g.ry;
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      } else {
+        const pts = g.pts || shape.pts || [];
+        if (pts.length < 2) { ctx.restore(); return; }
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        if (shape.closed || shape.kind === 'rect') {
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+      if (typeof S.saveSnapshot === 'function') S.saveSnapshot(layer);
+    });
+  };
+
+  /** Erase baked wall centerline ink (legacy commit used to stroke onto the sketch canvas). */
+  S.eraseWallRasterInk = function eraseWallRasterInk(wall: any, geom: any) {
+    if (!wall) return;
+    const pts = (geom && geom.pts) || wall.pts || [];
+    if (pts.length < 2) return;
+    const width = Math.max(6, (state.size || 2) + 6);
+    (state.layers || []).forEach((layer: any) => {
+      if (!layer || !layer.ctx) return;
+      const ctx = layer.ctx;
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = width;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+      ctx.restore();
+      if (typeof S.saveSnapshot === 'function') S.saveSnapshot(layer);
+    });
+  };
   S.entityCentroid = function entityCentroid(ent: any) {
     if (!ent) return { x: 0, y: 0 };
     if (ent.kind === 'wall') {
       const pts = ent.wall.pts || [];
+      if (typeof ent.seg === 'number' && pts[ent.seg] && pts[ent.seg + 1]) {
+        const a = pts[ent.seg], b = pts[ent.seg + 1];
+        return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      }
       if (!pts.length) return { x: 0, y: 0 };
       let sx = 0, sy = 0;
       pts.forEach((p: any) => { sx += p.x; sy += p.y; });
@@ -930,7 +1085,16 @@ export function initLayers() {
   }
   S.snapshotEntityGeom = function snapshotEntityGeom(ent: any) {
     if (ent.kind === 'wall') {
-      return { pts: (ent.wall.pts || []).map((p: any) => ({ x: p.x, y: p.y })) };
+      const pts = (ent.wall.pts || []).map((p: any) => ({ x: p.x, y: p.y }));
+      if (typeof ent.seg === 'number' && pts[ent.seg] && pts[ent.seg + 1]) {
+        return {
+          mode: 'segment',
+          seg: ent.seg,
+          a: { x: pts[ent.seg].x, y: pts[ent.seg].y },
+          b: { x: pts[ent.seg + 1].x, y: pts[ent.seg + 1].y },
+        };
+      }
+      return { pts };
     }
     const sh = ent.shape;
     if (sh.kind === 'ellipse') return { cx: sh.cx, cy: sh.cy, rx: sh.rx, ry: sh.ry };
@@ -938,6 +1102,10 @@ export function initLayers() {
   }
   S.applyEntityGeom = function applyEntityGeom(ent: any, geom: any) {
     if (ent.kind === 'wall') {
+      if (geom && geom.mode === 'segment' && typeof geom.seg === 'number' && geom.a && geom.b) {
+        S.applyWallSegmentGeom(ent.wall, geom.seg, geom.a, geom.b);
+        return;
+      }
       ent.wall.pts = geom.pts.map((p: any) => ({ x: p.x, y: p.y }));
       return;
     }
@@ -951,17 +1119,45 @@ export function initLayers() {
   S.beginVecXform = function beginVecXform(mode: any) {
     const ent = S.getSelectedVecEntity();
     if (!ent) { S.showHint('Select a wall or shape first'); return; }
+    const selSnapshot = state.sel
+      ? { ...state.sel }
+      : (ent.kind === 'shape'
+        ? { type: 'shape', idx: ent.idx, id: ent.shape && ent.shape.id }
+        : { type: 'wall', wi: ent.wi, id: ent.wall && ent.wall.id, seg: typeof ent.seg === 'number' ? ent.seg : null });
+    const base = S.snapshotEntityGeom(ent);
     state.vecXform = {
       mode,
       origin: S.entityCentroid(ent),
-      base: S.snapshotEntityGeom(ent),
+      base,
       start: null,
       before: null,
+      sel: selSnapshot,
+      inkCleared: false,
+      seg: typeof ent.seg === 'number' ? ent.seg : null,
     };
-    if (typeof S.setTool === 'function') S.setTool('select');
+    // Switch to select without wiping the active shape/wall selection
+    if (state.tool !== 'select' && typeof S.setTool === 'function') {
+      state._preserveSelOnSetTool = true;
+      S.setTool('select');
+      state._preserveSelOnSetTool = false;
+      state.sel = selSnapshot;
+    } else {
+      state.sel = selSnapshot;
+    }
+    // Drop any previously baked raster ink so the old outline/fill doesn't ghost.
+    if (ent.kind === 'shape') {
+      S.eraseShapeRasterInk(ent.shape, base);
+      state.vecXform.inkCleared = true;
+      if (typeof S.renderLayers === 'function') S.renderLayers();
+    } else if (ent.kind === 'wall') {
+      S.eraseWallRasterInk(ent.wall, base);
+      state.vecXform.inkCleared = true;
+      if (typeof S.renderLayers === 'function') S.renderLayers();
+    }
     const labels: Record<string, string> = { move: 'Drag to move', scale: 'Drag to scale', rotate: 'Drag to rotate' };
     S.showHint((labels[mode] || 'Transform') + ' · Esc to cancel');
     S.showSelectBar(ent.kind === 'wall' ? 'wall' : 'shape');
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
   }
   S.cancelVecXform = function cancelVecXform() {
     state.vecXform = null;
@@ -971,11 +1167,30 @@ export function initLayers() {
     if (!xf || !xf.start) return;
     const ent = S.getSelectedVecEntity();
     if (!ent) return;
+    // Clear baked raster ghost once at the start of the drag (original ink footprint).
+    if (!xf.inkCleared) {
+      if (ent.kind === 'shape') S.eraseShapeRasterInk(ent.shape, xf.base);
+      else if (ent.kind === 'wall') S.eraseWallRasterInk(ent.wall, xf.base);
+      xf.inkCleared = true;
+    }
     const o = xf.origin;
     const base = xf.base;
+    const segMode = ent.kind === 'wall' && base && base.mode === 'segment' && typeof base.seg === 'number';
+
+    const mapSeg = (xa: any, ya: any, xb: any, yb: any) => {
+      S.applyEntityGeom(ent, {
+        mode: 'segment',
+        seg: base.seg,
+        a: { x: xa, y: ya },
+        b: { x: xb, y: yb },
+      });
+    };
+
     if (xf.mode === 'move') {
       const dx = p.x - xf.start.x, dy = p.y - xf.start.y;
-      if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
+      if (segMode) {
+        mapSeg(base.a.x + dx, base.a.y + dy, base.b.x + dx, base.b.y + dy);
+      } else if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
         S.applyEntityGeom(ent, {
           pts: base.pts.map((q: any) => ({ x: q.x + dx, y: q.y + dy })),
         });
@@ -986,7 +1201,14 @@ export function initLayers() {
       const d0 = Math.hypot(xf.start.x - o.x, xf.start.y - o.y) || 1;
       const d1 = Math.hypot(p.x - o.x, p.y - o.y);
       const s = Math.max(0.05, d1 / d0);
-      if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
+      if (segMode) {
+        mapSeg(
+          o.x + (base.a.x - o.x) * s,
+          o.y + (base.a.y - o.y) * s,
+          o.x + (base.b.x - o.x) * s,
+          o.y + (base.b.y - o.y) * s,
+        );
+      } else if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
         S.applyEntityGeom(ent, {
           pts: base.pts.map((q: any) => ({
             x: o.x + (q.x - o.x) * s,
@@ -1001,16 +1223,18 @@ export function initLayers() {
       const a1 = Math.atan2(p.y - o.y, p.x - o.x);
       const da = a1 - a0;
       const cos = Math.cos(da), sin = Math.sin(da);
-      if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
+      const rot = (q: any) => {
+        const dx = q.x - o.x, dy = q.y - o.y;
+        return { x: o.x + dx * cos - dy * sin, y: o.y + dx * sin + dy * cos };
+      };
+      if (segMode) {
+        const na = rot(base.a), nb = rot(base.b);
+        mapSeg(na.x, na.y, nb.x, nb.y);
+      } else if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
         S.applyEntityGeom(ent, {
-          pts: base.pts.map((q: any) => {
-            const dx = q.x - o.x, dy = q.y - o.y;
-            return { x: o.x + dx * cos - dy * sin, y: o.y + dx * sin + dy * cos };
-          }),
+          pts: base.pts.map((q: any) => rot(q)),
         });
       } else {
-        // Ellipses stay axis-aligned; rotate by converting to polygon approx is overkill —
-        // move center stays, swap rx/ry feel wrong. Just rotate as if points (no-op on radii).
         S.applyEntityGeom(ent, { cx: base.cx, cy: base.cy, rx: base.rx, ry: base.ry });
         S.showHint('Rotate works on rectangles / polygons / walls');
       }

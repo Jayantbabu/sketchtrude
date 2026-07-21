@@ -128,18 +128,43 @@ export function initPersistence() {
     if ((window as any).requestIdleCallback) (window as any).requestIdleCallback(() => { if (!state.drawing) S.saveDoc(); }, { timeout: 4000 });
   }, 45000);
 
-  // Deep-clone masses for disk persistence, stripping live image/canvas caches (rebuilt on render).
-  // faceArt dataURLs, faceRegions, depths and materials are plain data and are kept.
-  S.massesForSave = function massesForSave() {
+  // Strip live DOM/caches that break IndexedDB + postMessage structured clone.
+  // Keep plain data (including bgImage data-URLs). Drop `_bgImg`, canvases, functions.
+  S.cloneForSave = function cloneForSave(value: any, fallback: any) {
     const skip = (k: any, v: any) => {
+      // Drop runtime caches (_bgImg, etc). Keep public fields like bgImage data-URLs.
+      if (typeof k === 'string' && k.startsWith('_')) return undefined;
       if (typeof v === 'function') return undefined;
       if (typeof HTMLImageElement !== 'undefined' && v instanceof HTMLImageElement) return undefined;
       if (typeof HTMLCanvasElement !== 'undefined' && v instanceof HTMLCanvasElement) return undefined;
       if (typeof ImageBitmap !== 'undefined' && v instanceof ImageBitmap) return undefined;
       return v;
     };
-    try { return JSON.parse(JSON.stringify(S.massing.masses || [], skip)); } catch (e) { return []; }
-  }
+    try { return JSON.parse(JSON.stringify(value, skip)); } catch (_e) { return fallback; }
+  };
+
+  // Masses: keep semantic flags (_wall, _fromWall, _wallKey, …). Drop only live image caches.
+  // Wall masses from 2D (`_fromWall`) are omitted — syncWallsToMasses rebuilds them.
+  S.massesForSave = function massesForSave() {
+    const skipCache = (_k: any, v: any) => {
+      if (typeof v === 'function') return undefined;
+      if (typeof HTMLImageElement !== 'undefined' && v instanceof HTMLImageElement) return undefined;
+      if (typeof HTMLCanvasElement !== 'undefined' && v instanceof HTMLCanvasElement) return undefined;
+      if (typeof ImageBitmap !== 'undefined' && v instanceof ImageBitmap) return undefined;
+      return v;
+    };
+    const masses = (S.massing.masses || []).filter((m: any) => !m._fromWall);
+    try { return JSON.parse(JSON.stringify(masses, skipCache)); } catch (_e) { return []; }
+  };
+
+  S.shapesForSave = function shapesForSave() {
+    return S.cloneForSave(state.shapes || [], []);
+  };
+
+  S.wallsForSave = function wallsForSave() {
+    return S.cloneForSave(state.walls || [], []);
+  };
+
   S.saveDoc = async function saveDoc() {
     if (S._autosaveBusy) return S.waitForAutosave();
     if (S._autosaveSuspended || !state.layers.length) return;
@@ -184,10 +209,10 @@ export function initPersistence() {
         activeLayer: state.activeLayer,
         pxPerUnit: state.pxPerUnit, scaleUnit: state.scaleUnit,
         scaleLabel: S.scaleLabelFromState(),
-        measurements: state.measurements,
-        walls: state.walls,
+        measurements: S.cloneForSave(state.measurements || [], []),
+        walls: S.wallsForSave(),
         wallsVisible: state.wallsVisible !== false,
-        shapes: state.shapes,
+        shapes: S.shapesForSave(),
         masses: S.massesForSave(),
         massBaseAnchor: S.massing.baseAnchor || null,
         layers: layerData,

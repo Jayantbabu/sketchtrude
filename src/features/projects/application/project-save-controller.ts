@@ -85,6 +85,8 @@ export interface ProjectSaveController {
   }): void;
   /** Surface a revision conflict without discarding local recovery. */
   markConflict(currentRevision: number): void;
+  /** Overwrite cloud with local by advancing base revision, then save. */
+  resolveConflictKeepLocal(): Promise<SaveOutcome>;
   getBaseServerRevision(): number;
   getDirtyTracker(): DirtyStateTracker;
   beginHydration(): void;
@@ -375,6 +377,37 @@ export class ProjectSaveControllerImpl implements ProjectSaveController {
       lastError: `Conflict with server revision ${currentRevision}`,
     });
     this.setStatus({ state: "conflict", currentRevision });
+  }
+
+  async resolveConflictKeepLocal(): Promise<SaveOutcome> {
+    if (!this.ensureReady()) {
+      return {
+        ok: false,
+        local: false,
+        cloud: false,
+        error: "Save controller is not initialized",
+        recoverable: false,
+      };
+    }
+    const status = this.status;
+    const currentRevision =
+      status.state === "conflict"
+        ? status.currentRevision
+        : this.baseServerRevision;
+    // Accept the server tip as our new base so the next put succeeds (overwrite).
+    this.baseServerRevision = Math.max(this.baseServerRevision, currentRevision);
+    this.cloudPending = true;
+    this.dirtyTracker.markDirty();
+    await this.writeSyncState({
+      syncStatus: "pending",
+      baseServerRevision: this.baseServerRevision,
+      lastError: undefined,
+    });
+    this.setStatus({
+      state: "dirty",
+      dirtySince: this.dirtyTracker.getState().dirtySince ?? Date.now(),
+    });
+    return this.saveNow("manual");
   }
 
   requestAutosave(reason: SaveReason): void {

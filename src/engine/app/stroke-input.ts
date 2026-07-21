@@ -95,16 +95,10 @@ export function initStrokeInput() {
       return;
     }
 
-    // Area polygon tool
+    // Area / polygon / wall: click-to-add vertices
     if (state.tool === 'area' || (state.tool as any) === 'line' || state.tool === 'wall') {
       e.preventDefault();
       const p = S.clientToCanvas(e.clientX, e.clientY);
-      // Line tool: click-drag for a single straight segment (PC, tablet, iPad, stylus)
-      if ((state.tool as any) === 'line') {
-        state.lineDrag = { x1: p.x, y1: p.y, x2: p.x, y2: p.y, pointerId: e.pointerId };
-        S.paper.setPointerCapture && S.paper.setPointerCapture(e.pointerId);
-        return;
-      }
       state._lastPolyClient = { x: e.clientX, y: e.clientY };
       state.smoothedX = p.x;
       state.smoothedY = p.y;
@@ -739,7 +733,7 @@ export function initStrokeInput() {
       if (state._shapeEnd) {
         const s = { x: state.startX, y: state.startY }, en = state._shapeEnd;
         if (state.snapshot) l.ctx.putImageData(state.snapshot, 0, 0);   // wipe the raster preview — shape is vector now
-        let geom = null, entity = null;
+        let geom: any = null, entity: any = null;
         const sw = Math.max(0.5, state.size);
         if (state.tool === 'rect') {
           const x = Math.min(s.x, en.x), y = Math.min(s.y, en.y), w = Math.abs(en.x - s.x), h = Math.abs(en.y - s.y);
@@ -755,7 +749,16 @@ export function initStrokeInput() {
           }
         }
         state._shapeEnd = null;
-        if (entity) { const __b = S.vectorSnapshot(); S.pushShapeEntity(entity); S.recordVec(__b); S.scheduleAutosave(); }
+        if (entity) {
+          const __b = S.vectorSnapshot();
+          S.pushShapeEntity(entity);
+          S.recordVec(__b);
+          S.scheduleAutosave();
+          if (entity.id && typeof S.selectShapeById === 'function') {
+            S.selectShapeById(entity.id, 'programmatic');
+          }
+          if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
+        }
         S.renderLayers(); S.refreshMeasurements();
         if (geom && typeof S.onShapeCommitted === 'function') S.onShapeCommitted(geom, { x: e.clientX, y: e.clientY });
       }

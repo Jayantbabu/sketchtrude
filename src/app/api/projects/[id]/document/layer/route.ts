@@ -29,7 +29,18 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const formData = await request.formData();
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch (err) {
+    const message =
+      err instanceof Error ? err.message : "Failed to parse multipart body";
+    console.error("[document/layer] formData parse failed:", message);
+    return NextResponse.json(
+      { error: "Invalid multipart body", detail: message },
+      { status: 400 },
+    );
+  }
   const indexRaw = formData.get("layer_index");
   const layerIndex = Number(indexRaw);
   const file = formData.get("raster");

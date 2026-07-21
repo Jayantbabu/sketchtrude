@@ -9,6 +9,9 @@
     </div>
     <div class="topbar-spacer"></div>
 
+    <!-- Save / conflict status (hosted from parent) -->
+    <div id="host-save-status" class="host-save-status" hidden></div>
+
     <!-- Mode toggle — compact -->
     <div class="pill-group" id="mode-group">
       <button class="pill active" data-mode="draw">
@@ -233,35 +236,39 @@
       <div class="puck-section">
         <div class="puck-name" id="puck-name">FINE PEN</div>
       </div>
-      <div class="puck-divider"></div>
-      <div class="puck-section">
-        <div class="puck-color" id="puck-color" style="background:#0a0a0a"></div>
-      </div>
-      <div class="puck-divider"></div>
-      <div class="puck-section">
-        <div class="puck-label">SIZE</div>
-        <div class="puck-size">
-          <input type="range" id="puck-size-slider" min="1" max="50" value="2" step="0.5">
-          <div class="puck-size-val" id="puck-size-val">2</div>
+      <!-- Context tool options (shapes / wall / measure / region / select) -->
+      <div id="puck-context" class="puck-context" style="display:none;"></div>
+      <div id="puck-draw-controls" class="puck-draw-controls">
+        <div class="puck-divider"></div>
+        <div class="puck-section">
+          <div class="puck-color" id="puck-color" style="background:#0a0a0a"></div>
         </div>
-      </div>
-      <div class="puck-divider"></div>
-      <div class="puck-section">
-        <div class="puck-label">OPACITY</div>
-        <div class="puck-size">
-          <input type="range" id="puck-alpha-slider" min="10" max="100" value="100">
-          <div class="puck-size-val" id="puck-alpha-val">100</div>
+        <div class="puck-divider"></div>
+        <div class="puck-section">
+          <div class="puck-label">SIZE</div>
+          <div class="puck-size">
+            <input type="range" id="puck-size-slider" min="1" max="50" value="2" step="0.5">
+            <div class="puck-size-val" id="puck-size-val">2</div>
+          </div>
         </div>
-      </div>
-      <div class="puck-divider"></div>
-      <div class="puck-stab">
-        <div class="puck-stab-icon">STAB</div>
-        <input type="range" id="puck-stab-slider" min="0" max="80" value="30">
-        <div class="puck-stab-val" id="puck-stab-val">30</div>
-      </div>
-      <div class="puck-divider"></div>
-      <div class="puck-preview">
-        <svg width="28" height="20" id="puck-preview-svg"></svg>
+        <div class="puck-divider"></div>
+        <div class="puck-section">
+          <div class="puck-label">OPACITY</div>
+          <div class="puck-size">
+            <input type="range" id="puck-alpha-slider" min="10" max="100" value="100">
+            <div class="puck-size-val" id="puck-alpha-val">100</div>
+          </div>
+        </div>
+        <div class="puck-divider"></div>
+        <div class="puck-stab">
+          <div class="puck-stab-icon">STAB</div>
+          <input type="range" id="puck-stab-slider" min="0" max="80" value="30">
+          <div class="puck-stab-val" id="puck-stab-val">30</div>
+        </div>
+        <div class="puck-divider"></div>
+        <div class="puck-preview">
+          <svg width="28" height="20" id="puck-preview-svg"></svg>
+        </div>
       </div>
     </div>
 
@@ -272,8 +279,7 @@
         <!-- Hue ring + SV square stacked -->
         <div style="display:flex;justify-content:center;position:relative;">
           <canvas id="hue-wheel" class="color-wheel-canvas" width="200" height="200"></canvas>
-          <canvas id="sv-square" class="color-sv-canvas" width="124" height="124"
-            style="position:absolute;top:38px;left:38px;"></canvas>
+          <canvas id="sv-square" class="color-sv-canvas" width="124" height="124"></canvas>
         </div>
         <!-- Current colour + hex + eyedropper -->
         <div class="wheel-row">
@@ -647,6 +653,11 @@
         <span class="prop-label">Opacity</span>
         <input type="range" id="layer-opacity" min="0" max="100" value="100">
         <span class="prop-val" id="layer-opacity-val">100%</span>
+      </div>
+      <div class="prop-row" id="shape-size-row" style="display:none;">
+        <span class="prop-label">Size %</span>
+        <input type="range" id="shape-size" min="10" max="300" value="100">
+        <span class="prop-val" id="shape-size-val">100%</span>
       </div>
       <div class="prop-row">
         <span class="prop-label">Trace</span>

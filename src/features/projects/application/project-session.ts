@@ -138,6 +138,59 @@ export class ProjectSession {
     return this.saveController.flushPendingSave();
   }
 
+  resolveConflictKeepLocal(): Promise<SaveOutcome> {
+    return this.saveController.resolveConflictKeepLocal();
+  }
+
+  async resolveConflictReloadFromCloud(): Promise<{ ok: boolean; error?: string }> {
+    if (this.disposed) {
+      return { ok: false, error: "Project session has been disposed" };
+    }
+    try {
+      this.saveController.beginHydration();
+      const loaded = await this.cloudRepo.loadDocument(this.projectId);
+      if (!loaded?.document) {
+        this.saveController.markHydrated({
+          baseServerRevision: this.saveController.getBaseServerRevision(),
+          cloudPending: true,
+        });
+        return { ok: false, error: "No cloud document available" };
+      }
+      await this.adapter.importDocument(loaded.document);
+      // Drop stale local recovery so the next load prefers cloud.
+      try {
+        await this.localRepo.deleteSnapshot(this.projectId);
+        await this.localRepo.deletePendingSave(this.projectId);
+      } catch {
+        /* best-effort */
+      }
+      const mutationVersion = this.adapter.getMutationVersion();
+      await this.localRepo.putSnapshot({
+        projectId: this.projectId,
+        document: loaded.document,
+        localMutationVersion: mutationVersion,
+        lastSyncedMutationVersion: mutationVersion,
+        baseServerRevision: loaded.revision,
+        syncStatus: "synced",
+        updatedAt: loaded.updatedAt || new Date().toISOString(),
+      });
+      this.saveController.markHydrated({
+        baseServerRevision: loaded.revision,
+        mutationVersion,
+        lastSyncedMutationVersion: mutationVersion,
+        lastSavedAt: loaded.updatedAt,
+        cloudPending: false,
+      });
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.saveController.markConflict(
+        this.saveController.getBaseServerRevision(),
+      );
+      return { ok: false, error: message };
+    }
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;

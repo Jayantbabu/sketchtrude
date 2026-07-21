@@ -235,7 +235,49 @@ export function initHostBridge() {
           }, '*');
         }
       }
+      return;
+    }
+
+    if (type === 'sketchtrude-save-status') {
+      S.renderHostSaveStatus(data);
     }
   });
 
+  S.renderHostSaveStatus = function renderHostSaveStatus(payload: any) {
+    const el = $el('host-save-status');
+    if (!el) return;
+    const label = payload && payload.label ? String(payload.label) : '';
+    const st = payload && payload.state ? String(payload.state) : '';
+    if (!label) {
+      el.hidden = true;
+      el.innerHTML = '';
+      return;
+    }
+    el.hidden = false;
+    el.className = 'host-save-status'
+      + (st === 'conflict' || st === 'error' ? ' is-error'
+        : st === 'saving-local' || st === 'saving-cloud' ? ' is-saving'
+        : st === 'saved-local' || st === 'saved-cloud' || st === 'ready-clean' ? ' is-saved'
+        : '');
+    let html = '<span class="hss-label">' + label + '</span>';
+    if (st === 'conflict') {
+      html += '<span class="hss-actions">'
+        + '<button type="button" class="hss-btn" data-action="keep-local">Keep local</button>'
+        + '<button type="button" class="hss-btn" data-action="reload-cloud">Reload cloud</button>'
+        + '</span>';
+    }
+    el.innerHTML = html;
+    el.querySelectorAll('.hss-btn').forEach((btn: any) => {
+      btn.addEventListener('click', (ev: any) => {
+        ev.stopPropagation();
+        if (window.parent !== window) {
+          window.parent.postMessage({
+            type: 'sketchtrude-conflict-resolve',
+            action: btn.dataset.action,
+            projectId: (window as any).__SKETCHTRUDE_PROJECT_ID,
+          }, '*');
+        }
+      });
+    });
+  };
 }

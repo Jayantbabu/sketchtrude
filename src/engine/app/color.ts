@@ -184,11 +184,20 @@ export function initColor() {
     }
     function onSVDrag(e: any) {
       e.preventDefault();
+      // Square is CSS-rotated 45° (diamond). Un-rotate pointer into local canvas space.
       const rect = svCanvas.getBoundingClientRect();
-      const ex = Math.max(0, Math.min(rect.width, (e.clientX || e.touches?.[0]?.clientX) - rect.left));
-      const ey = Math.max(0, Math.min(rect.height, (e.clientY || e.touches?.[0]?.clientY) - rect.top));
-      S.hsv.s = Math.round((ex / rect.width) * 100);
-      S.hsv.v = Math.round((1 - ey / rect.height) * 100);
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const px = (e.clientX || e.touches?.[0]?.clientX) - cx;
+      const py = (e.clientY || e.touches?.[0]?.clientY) - cy;
+      const ang = -Math.PI / 4;
+      const lx = px * Math.cos(ang) - py * Math.sin(ang);
+      const ly = px * Math.sin(ang) + py * Math.cos(ang);
+      const half = Math.min(rect.width, rect.height) / 2;
+      const ex = Math.max(0, Math.min(svCanvas.width, ((lx / half) * 0.5 + 0.5) * svCanvas.width));
+      const ey = Math.max(0, Math.min(svCanvas.height, ((ly / half) * 0.5 + 0.5) * svCanvas.height));
+      S.hsv.s = Math.round((ex / svCanvas.width) * 100);
+      S.hsv.v = Math.round((1 - ey / svCanvas.height) * 100);
       S.drawSVSquare();
       const hex = S.hsvToHex(S.hsv.h, S.hsv.s, S.hsv.v);
       S.setColor(hex);
@@ -259,27 +268,40 @@ export function initColor() {
 
   $el('puck-color').addEventListener('click', (e: any) => {
     e.stopPropagation();
+    if (S.colorPopover.classList.contains('show')) {
+      S.colorPopover.classList.remove('show');
+      return;
+    }
     const puckRect = $el('puck').getBoundingClientRect();
     const areaRect = S.area.getBoundingClientRect();
-    S.colorPopover.style.left = Math.max(8, puckRect.left - areaRect.left - 100) + 'px';
-    S.colorPopover.style.top = '';
-    S.colorPopover.style.bottom = '';
-    const spaceBelow = areaRect.bottom - puckRect.bottom;
-    const spaceAbove = puckRect.top - areaRect.top;
-    if (spaceBelow >= 300 || spaceBelow >= spaceAbove) {
-      S.colorPopover.style.bottom = (areaRect.height - (puckRect.top - areaRect.top) + 10) + 'px';
-    } else {
-      S.colorPopover.style.top = (puckRect.bottom - areaRect.top + 10) + 'px';
-    }
-    S.colorPopover.classList.toggle('show');
-    if (S.colorPopover.classList.contains('show')) {
-      S.drawHueWheel();
-      S.drawSVSquare();
-      S.updateHarmony();
-      S.renderSwatches();
-      // Show fill tolerance row only when fill tool active
-      $el('fill-tolerance-row').style.display = (state.tool === 'fill' || state.tool === 'wand' || state.tool === 'lasso') ? 'block' : 'none';
-    }
+    S.colorPopover.classList.add('show');
+    S.drawHueWheel();
+    S.drawSVSquare();
+    S.updateHarmony();
+    S.renderSwatches();
+    $el('fill-tolerance-row').style.display = (state.tool === 'fill' || state.tool === 'wand' || state.tool === 'lasso') ? 'block' : 'none';
+
+    // Measure after show, then clamp inside the canvas area (prefer above when puck is low).
+    requestAnimationFrame(() => {
+      const popH = S.colorPopover.offsetHeight || 360;
+      const popW = S.colorPopover.offsetWidth || 280;
+      const spaceBelow = areaRect.bottom - puckRect.bottom;
+      const spaceAbove = puckRect.top - areaRect.top;
+      const preferAbove = spaceAbove >= popH + 12 || spaceBelow < popH + 12 || spaceAbove >= spaceBelow;
+      S.colorPopover.style.bottom = '';
+      S.colorPopover.style.top = '';
+      let left = puckRect.left - areaRect.left + puckRect.width / 2 - popW / 2;
+      left = Math.max(8, Math.min(left, areaRect.width - popW - 8));
+      S.colorPopover.style.left = left + 'px';
+      if (preferAbove) {
+        const bottom = areaRect.height - (puckRect.top - areaRect.top) + 10;
+        S.colorPopover.style.bottom = Math.max(8, bottom) + 'px';
+      } else {
+        let top = puckRect.bottom - areaRect.top + 10;
+        if (top + popH > areaRect.height - 8) top = Math.max(8, areaRect.height - popH - 8);
+        S.colorPopover.style.top = top + 'px';
+      }
+    });
   });
 
   // Eyedropper

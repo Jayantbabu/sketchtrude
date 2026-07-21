@@ -51,6 +51,7 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
     saveStatus,
     error: loadError,
     contentReady: sessionContentReady,
+    session,
     flushSave,
   } = useProjectLoader({ projectId, iframeRef });
 
@@ -69,10 +70,38 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
       if (data.type === "sketchtrude-mode-loading") {
         setModeLoading(!!data.loading);
       }
+      if (data.type === "sketchtrude-conflict-resolve") {
+        if (data.projectId && data.projectId !== projectId) return;
+        const action = data.action as string | undefined;
+        void (async () => {
+          if (!session) return;
+          if (action === "keep-local") {
+            await session.resolveConflictKeepLocal();
+          } else if (action === "reload-cloud") {
+            await session.resolveConflictReloadFromCloud();
+          }
+        })();
+      }
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [projectId]);
+  }, [projectId, session]);
+
+  // Push save status into the engine topbar (left of Draw / Navigate).
+  useEffect(() => {
+    const win = iframeRef.current?.contentWindow;
+    if (!win || !contentReady) return;
+    const label = saveStatusLabel(saveStatus);
+    win.postMessage(
+      {
+        type: "sketchtrude-save-status",
+        projectId,
+        state: saveStatus.state,
+        label,
+      },
+      "*",
+    );
+  }, [saveStatus, contentReady, projectId]);
 
   const handleBack = useCallback(async () => {
     if (navigating) return;
@@ -127,8 +156,6 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
     navigating,
   ]);
 
-  const statusText = saveStatusLabel(saveStatus);
-
   return (
     <>
       <button
@@ -154,24 +181,6 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
         </svg>
         <span className="studio-back-label">Back</span>
       </button>
-
-      {statusText && contentReady && !showLoading && (
-        <div
-          className={
-            "studio-save-status" +
-            (saveStatus.state === "error" || saveStatus.state === "conflict"
-              ? " is-error"
-              : saveStatus.state === "saving-local" ||
-                  saveStatus.state === "saving-cloud"
-                ? " is-saving"
-                : " is-saved")
-          }
-          role="status"
-          aria-live="polite"
-        >
-          {statusText}
-        </div>
-      )}
 
       {showLoading && (
         <div className="studio-loading" aria-busy="true">
