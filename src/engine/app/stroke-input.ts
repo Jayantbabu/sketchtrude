@@ -95,8 +95,8 @@ export function initStrokeInput() {
       return;
     }
 
-    // Area / polygon / wall: click-to-add vertices
-    if (state.tool === 'area' || (state.tool as any) === 'line' || state.tool === 'wall') {
+    // Area / polygon: click-to-add vertices. Wall: drag-and-draw (Keyplan style).
+    if (state.tool === 'area' || (state.tool as any) === 'line') {
       e.preventDefault();
       const p = S.clientToCanvas(e.clientX, e.clientY);
       state._lastPolyClient = { x: e.clientX, y: e.clientY };
@@ -107,8 +107,7 @@ export function initStrokeInput() {
       if (state._lastAreaTap &&
           now - state._lastAreaTap.time < 350 &&
           Math.hypot(e.clientX - state._lastAreaTap.x, e.clientY - state._lastAreaTap.y) < 24) {
-        // Double-tap → finish (area needs 3+, line/wall accept a 2-point run)
-        const enough = ((state.tool as any) === 'line' || state.tool === 'wall') ? state.polyPoints.length >= 2 : state.polyPoints.length >= 3;
+        const enough = (state.tool as any) === 'line' ? state.polyPoints.length >= 2 : state.polyPoints.length >= 3;
         if (state.polyActive && enough) {
           state._lastAreaTap = null;
           S.finishPoly();
@@ -117,6 +116,26 @@ export function initStrokeInput() {
       }
       state._lastAreaTap = { time: now, x: e.clientX, y: e.clientY };
       S.addPolyVertex(p);
+      return;
+    }
+
+    if (state.tool === 'wall') {
+      e.preventDefault();
+      const p = S.clientToCanvas(e.clientX, e.clientY);
+      S.beginWallDrag(p, e.shiftKey);
+      S.paper.setPointerCapture && S.paper.setPointerCapture(e.pointerId);
+      const mv = (ev: any) => {
+        S.updateWallDrag(S.clientToCanvas(ev.clientX, ev.clientY), ev.shiftKey);
+      };
+      const up = () => {
+        document.removeEventListener('pointermove', mv);
+        document.removeEventListener('pointerup', up);
+        document.removeEventListener('pointercancel', up);
+        S.endWallDrag();
+      };
+      document.addEventListener('pointermove', mv);
+      document.addEventListener('pointerup', up);
+      document.addEventListener('pointercancel', up);
       return;
     }
 
@@ -140,6 +159,25 @@ export function initStrokeInput() {
     if (state.tool === 'select') {
       e.preventDefault();
       const p = S.clientToCanvas(e.clientX, e.clientY);
+      // Bulge handle drag for curved walls
+      if (typeof S.bulgeHandleHit === 'function') {
+        const bh = S.bulgeHandleHit(p);
+        if (bh) {
+          S.beginBulgeDrag(bh.wi);
+          S.paper.setPointerCapture && S.paper.setPointerCapture(e.pointerId);
+          const mv = (ev: any) => S.applyBulgeDragAt(S.clientToCanvas(ev.clientX, ev.clientY));
+          const up = () => {
+            document.removeEventListener('pointermove', mv);
+            document.removeEventListener('pointerup', up);
+            document.removeEventListener('pointercancel', up);
+            S.endBulgeDrag();
+          };
+          document.addEventListener('pointermove', mv);
+          document.addEventListener('pointerup', up);
+          document.addEventListener('pointercancel', up);
+          return;
+        }
+      }
       // Active move/scale/rotate session for selected wall or shape
       if (state.vecXform && state.vecXform.mode) {
         const ent = S.getSelectedVecEntity();
@@ -163,6 +201,7 @@ export function initStrokeInput() {
             S.syncSceneObjectsToEngine();
             S.renderLayers();
             state.vecXform = null;
+            if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
             S.showHint('Transform applied');
           };
           document.addEventListener('pointermove', mv);
@@ -843,9 +882,9 @@ export function initStrokeInput() {
   S.paper.addEventListener('pointercancel', S.endPointer);
   S.paper.addEventListener('pointerleave', S.endPointer);
 
-  // Double-click closes the polygon
+  // Double-click closes the polygon (area / line). Wall uses drag-draw.
   S.paper.addEventListener('dblclick', (e: any) => {
-    if ((state.tool === 'area' || (state.tool as any) === 'line' || state.tool === 'wall') && state.polyActive) {
+    if ((state.tool === 'area' || (state.tool as any) === 'line') && state.polyActive) {
       e.preventDefault();
       S.finishPoly();
     }

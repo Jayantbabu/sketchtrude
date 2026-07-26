@@ -23,6 +23,35 @@ export function initFill() {
   }
 
   S._thumbCanvas = null;
+  S.drawVectorOverlayToCtx = function drawVectorOverlayToCtx(ctx: any) {
+    if (!S.rulerOverlay || typeof XMLSerializer === 'undefined') return Promise.resolve();
+    const clone = S.rulerOverlay.cloneNode(true) as SVGSVGElement;
+    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    clone.setAttribute('width', String(S.doc.wPx));
+    clone.setAttribute('height', String(S.doc.hPx));
+    clone.setAttribute('viewBox', `0 0 ${S.doc.wPx} ${S.doc.hPx}`);
+
+    // Thumbnails represent the document, not its transient selection state.
+    clone.querySelectorAll('[stroke="#a02835"]').forEach((el) => el.setAttribute('stroke', '#161616'));
+    clone.querySelectorAll('[fill="rgba(160,40,53,0.32)"]').forEach((el) => el.setAttribute('fill', 'rgba(48,48,52,0.82)'));
+
+    const svg = new XMLSerializer().serializeToString(clone);
+    const url = URL.createObjectURL(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }));
+    return new Promise<void>((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        try { ctx.drawImage(image, 0, 0, S.doc.wPx, S.doc.hPx); } catch (_) {}
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      image.src = url;
+    });
+  }
+
   S.generateThumbnailBlob = async function generateThumbnailBlob(maxW: any) {
     maxW = maxW != null ? maxW : 420;
     if (!state.layers.length || S.doc.wPx <= 0 || S.doc.hPx <= 0) return null;
@@ -38,6 +67,7 @@ export function initFill() {
     full.width = S.doc.wPx;
     full.height = S.doc.hPx;
     S.flattenVisibleToCtx(full.getContext('2d') as any);
+    await S.drawVectorOverlayToCtx(full.getContext('2d') as any);
     tctx.drawImage(full, 0, 0, tw, th);
     return new Promise((resolve: any) => S._thumbCanvas.toBlob(resolve, 'image/jpeg', 0.84));
   }

@@ -268,12 +268,14 @@ export function initLayers() {
   S.vectorSnapshot = function vectorSnapshot() {
     return {
       walls: JSON.parse(JSON.stringify(state.walls || [])),
+      wallRooms: JSON.parse(JSON.stringify(state.wallRooms || [])),
       shapes: JSON.parse(JSON.stringify(state.shapes || [])),
       measurements: JSON.parse(JSON.stringify(state.measurements || [])),
     };
   }
   S.applyVectorSnapshot = function applyVectorSnapshot(s: any) {
     state.walls = JSON.parse(JSON.stringify(s.walls || []));
+    state.wallRooms = JSON.parse(JSON.stringify(s.wallRooms || []));
     state.shapes = JSON.parse(JSON.stringify(s.shapes || []));
     S.ensureAllShapeIds(state.shapes);
     state.measurements = JSON.parse(JSON.stringify(s.measurements || []));
@@ -281,8 +283,10 @@ export function initLayers() {
     S.syncSelectionManagerFromLegacy('programmatic');
     if (typeof S.showSelectBar === 'function') S.showSelectBar(null);
     if (typeof S.showOpeningPalette === 'function') S.showOpeningPalette(state.tool === 'opening');
+    if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms();
     if (typeof S.refreshMeasurements === 'function') S.refreshMeasurements();
     if (typeof S.syncWallsToMasses === 'function') S.syncWallsToMasses();
+    if (typeof S.syncSceneObjectsToEngine === 'function') S.syncSceneObjectsToEngine();
     if (typeof S.renderSchedule === 'function') S.renderSchedule();
   }
   S._lastVecPush = 0;
@@ -449,9 +453,19 @@ export function initLayers() {
                     }
                   }
                 }
+                if (ref && ref.kind === 'wall-room') {
+                  // Room walls inherit through the hierarchy; also clear their raster ink.
+                  const room = (state.wallRooms || []).find((r: any) => r && r.id === ref.id);
+                  if (room && !next && typeof S.eraseWallRasterInk === 'function') {
+                    (room.wallIds || []).forEach((wid: string) => {
+                      const w = (state.walls || []).find((x: any) => x && x.id === wid);
+                      if (w) S.eraseWallRasterInk(w);
+                    });
+                  }
+                }
                 // wall-face: LayerEngine visibility alone drives per-segment hide
                 // (do NOT flip the whole wall.visible — that hid the entire room).
-                if (ref && (ref.kind === 'wall' || ref.kind === 'wall-face')
+                if (ref && (ref.kind === 'wall' || ref.kind === 'wall-face' || ref.kind === 'wall-room')
                   && typeof S.syncWallsToMasses === 'function') {
                   S.syncWallsToMasses();
                 }
@@ -946,6 +960,18 @@ export function initLayers() {
           return;
         }
       }
+      if (ref && ref.kind === 'wall-room') {
+        const room = (state.wallRooms || []).find((r: any) => r && r.id === ref.id);
+        const ids = room ? (room.wallIds || []).slice() : [];
+        ids.forEach((wid: string) => {
+          const wi = (state.walls || []).findIndex((w: any) => w && w.id === wid);
+          if (wi >= 0) S.deleteWall(wi);
+        });
+        state._panelSelectedObjectId = null;
+        S.syncSceneObjectsToEngine();
+        S.renderLayers();
+        return;
+      }
       if (ref && ref.kind === 'wall-face') {
         S.showHint('Hide this wall with the eye icon, or delete the Room to remove all walls');
         return;
@@ -1086,12 +1112,28 @@ export function initLayers() {
   S.snapshotEntityGeom = function snapshotEntityGeom(ent: any) {
     if (ent.kind === 'wall') {
       const pts = (ent.wall.pts || []).map((p: any) => ({ x: p.x, y: p.y }));
-      if (typeof ent.seg === 'number' && pts[ent.seg] && pts[ent.seg + 1]) {
+      // Legacy polylines only — 2-pt walls fall through to the whole-wall branch below
+      if (pts.length > 2 && typeof ent.seg === 'number' && pts[ent.seg] && pts[ent.seg + 1]) {
         return {
           mode: 'segment',
           seg: ent.seg,
           a: { x: pts[ent.seg].x, y: pts[ent.seg].y },
           b: { x: pts[ent.seg + 1].x, y: pts[ent.seg + 1].y },
+        };
+      }
+      // Independent Keyplan walls are 2-pt segments — treat whole wall as one segment
+      if (pts.length >= 2) {
+        return {
+          mode: 'segment',
+          seg: 0,
+          a: { x: pts[0].x, y: pts[0].y },
+          b: { x: pts[pts.length - 1].x, y: pts[pts.length - 1].y },
+          pts,
+          bulge: ent.wall.bulge || 0,
+          // Neighbours sharing each end, so the room stretches with the wall.
+          links: typeof S.captureWallJunctionLinks === 'function'
+            ? S.captureWallJunctionLinks(ent.wall)
+            : null,
         };
       }
       return { pts };
@@ -1154,13 +1196,18 @@ export function initLayers() {
       state.vecXform.inkCleared = true;
       if (typeof S.renderLayers === 'function') S.renderLayers();
     }
-    const labels: Record<string, string> = { move: 'Drag to move', scale: 'Drag to scale', rotate: 'Drag to rotate' };
+    const labels: Record<string, string> = {
+      move: 'Drag to move',
+      scale: ent.kind === 'wall' ? 'Drag from the wall end you want to resize' : 'Drag to scale',
+      rotate: 'Drag to rotate',
+    };
     S.showHint((labels[mode] || 'Transform') + ' · Esc to cancel');
     S.showSelectBar(ent.kind === 'wall' ? 'wall' : 'shape');
     if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
   }
   S.cancelVecXform = function cancelVecXform() {
     state.vecXform = null;
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
   }
   S.applyVecXformAt = function applyVecXformAt(p: any) {
     const xf = state.vecXform;
@@ -1188,7 +1235,11 @@ export function initLayers() {
 
     if (xf.mode === 'move') {
       const dx = p.x - xf.start.x, dy = p.y - xf.start.y;
-      if (segMode) {
+      if (ent.kind === 'wall' && typeof S.applyWallNormalMove === 'function') {
+        const ba = (base.mode === 'segment' && base.a) ? base.a : (base.pts && base.pts[0]);
+        const bb = (base.mode === 'segment' && base.b) ? base.b : (base.pts && base.pts[base.pts.length - 1]);
+        if (ba && bb) S.applyWallNormalMove(ent.wall, ba, bb, dx, dy, base.links);
+      } else if (segMode) {
         mapSeg(base.a.x + dx, base.a.y + dy, base.b.x + dx, base.b.y + dy);
       } else if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
         S.applyEntityGeom(ent, {
@@ -1198,27 +1249,37 @@ export function initLayers() {
         S.applyEntityGeom(ent, { cx: base.cx + dx, cy: base.cy + dy, rx: base.rx, ry: base.ry });
       }
     } else if (xf.mode === 'scale') {
-      const d0 = Math.hypot(xf.start.x - o.x, xf.start.y - o.y) || 1;
-      const d1 = Math.hypot(p.x - o.x, p.y - o.y);
-      const s = Math.max(0.05, d1 / d0);
-      if (segMode) {
-        mapSeg(
-          o.x + (base.a.x - o.x) * s,
-          o.y + (base.a.y - o.y) * s,
-          o.x + (base.b.x - o.x) * s,
-          o.y + (base.b.y - o.y) * s,
-        );
-      } else if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
-        S.applyEntityGeom(ent, {
-          pts: base.pts.map((q: any) => ({
-            x: o.x + (q.x - o.x) * s,
-            y: o.y + (q.y - o.y) * s,
-          })),
-        });
+      if (ent.kind === 'wall' && typeof S.applyWallTangentScale === 'function') {
+        const ba = (base.mode === 'segment' && base.a) ? base.a : (base.pts && base.pts[0]);
+        const bb = (base.mode === 'segment' && base.b) ? base.b : (base.pts && base.pts[base.pts.length - 1]);
+        if (ba && bb) S.applyWallTangentScale(ent.wall, ba, bb, o, xf.start, p, base.links);
       } else {
-        S.applyEntityGeom(ent, { cx: base.cx, cy: base.cy, rx: base.rx * s, ry: base.ry * s });
+        const d0 = Math.hypot(xf.start.x - o.x, xf.start.y - o.y) || 1;
+        const d1 = Math.hypot(p.x - o.x, p.y - o.y);
+        const s = Math.max(0.05, d1 / d0);
+        if (segMode) {
+          mapSeg(
+            o.x + (base.a.x - o.x) * s,
+            o.y + (base.a.y - o.y) * s,
+            o.x + (base.b.x - o.x) * s,
+            o.y + (base.b.y - o.y) * s,
+          );
+        } else if (ent.kind === 'wall' || (ent.shape && ent.shape.kind !== 'ellipse')) {
+          S.applyEntityGeom(ent, {
+            pts: base.pts.map((q: any) => ({
+              x: o.x + (q.x - o.x) * s,
+              y: o.y + (q.y - o.y) * s,
+            })),
+          });
+        } else {
+          S.applyEntityGeom(ent, { cx: base.cx, cy: base.cy, rx: base.rx * s, ry: base.ry * s });
+        }
       }
     } else if (xf.mode === 'rotate') {
+      if (ent.kind === 'wall' && ent.wall && ent.wall.roomId) {
+        S.showHint('Rotate disabled for room walls — move or scale instead');
+        return;
+      }
       const a0 = Math.atan2(xf.start.y - o.y, xf.start.x - o.x);
       const a1 = Math.atan2(p.y - o.y, p.x - o.x);
       const da = a1 - a0;
@@ -1239,7 +1300,11 @@ export function initLayers() {
         S.showHint('Rotate works on rectangles / polygons / walls');
       }
     }
-    if (ent.kind === 'wall') S.syncWallsToMasses();
+    if (ent.kind === 'wall') {
+      S.syncWallsToMasses();
+      // Keep room membership live but leave the panel rebuild to drag end.
+      if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms({ skipLayerSync: true });
+    }
     S.refreshMeasurements();
   }
   S.addBackgroundImageToSelection = function addBackgroundImageToSelection() {

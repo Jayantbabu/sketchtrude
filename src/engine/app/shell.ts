@@ -22,6 +22,12 @@ export function initShell() {
       S.showHint('Transform cancelled');
       return;
     }
+    if (e.key === 'Escape' && (state.wallDrag || state.wallChainEnd)) {
+      if (typeof S.cancelWallDrag === 'function') S.cancelWallDrag();
+      else { state.wallDrag = null; state.wallChainEnd = null; S.refreshMeasurements(); }
+      S.showHint('Wall chain cancelled');
+      return;
+    }
     if (e.key === 'Escape' && state.polyActive) {
       state.polyPoints = [];
       state.polyActive = false;

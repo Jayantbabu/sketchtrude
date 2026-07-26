@@ -35,7 +35,11 @@ export function initDimensions() {
     const len = Math.sqrt(dx*dx + dy*dy);
     if (len < 2) return;
     const nx = -dy / len, ny = dx / len;
-    const extLen = 28, tickLen = 12;
+    // Scale-set preview: push dim far from the stroke so a stylus hand doesn't cover it
+    const settingScale = !!(isPreview && (state.pendingScale || state.pendingScaleStart));
+    const extLen = settingScale ? 96 : 28;
+    const labelOff = settingScale ? 56 : 20;
+    const tickLen = 12;
 
     // Extension lines — non-interactive
     [[m.x1,m.y1],[m.x2,m.y2]].forEach(([x,y]) => {
@@ -81,8 +85,8 @@ export function initDimensions() {
     // Label group — clickable for delete
     const distPx = len;
     let text = S.formatLen(distPx);
-    const lx = (m.x1 + m.x2) / 2 + nx * (extLen + 20);
-    const ly = (m.y1 + m.y2) / 2 + ny * (extLen + 20);
+    const lx = (m.x1 + m.x2) / 2 + nx * (extLen + labelOff);
+    const ly = (m.y1 + m.y2) / 2 + ny * (extLen + labelOff);
     const angle = Math.atan2(dy, dx) * 180 / Math.PI;
     const readableAngle = (angle > 90 || angle < -90) ? angle + 180 : angle;
     const pW = text.length * 15 + (isPreview ? 20 : 60);

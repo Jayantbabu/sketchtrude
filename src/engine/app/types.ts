@@ -15,6 +15,7 @@ export type Point2 = { x: number; y: number };
 /** Vector-entity snapshot shared by undo entries and `vectorSnapshot()`. */
 export type VectorEntitySnapshot = {
   walls: Wall[];
+  wallRooms?: WallRoom[];
   shapes: Shape[];
   measurements: Measurement[];
 };
@@ -73,7 +74,20 @@ export type Wall = {
   thickMM?: number;
   heightM?: number;
   openings?: Opening2D[];
+  /** Signed circular-arc sagitta in doc px; 0/undefined = straight. */
+  bulge?: number;
+  roomId?: string | null;
+  name?: string;
+  visible?: boolean;
   [key: string]: unknown;
+};
+
+/** Closed loop of independent wall segments detected by the wall graph. */
+export type WallRoom = {
+  id: string;
+  name: string;
+  wallIds: string[];
+  areaPx2: number;
 };
 
 export type Shape = {
@@ -205,6 +219,9 @@ export type EngineState = {
   snapEnabled: boolean;
   walls: Wall[];
   wallsVisible: boolean;
+  wallRooms: WallRoom[];
+  wallChainEnd: Point2 | null;
+  wallDrag: { start: Point2; current: Point2; shift?: boolean } | null;
   shapes: Shape[];
   wallThickMM: number;
   wallHeightM: number;
@@ -214,6 +231,8 @@ export type EngineState = {
   winWMM: number;
   winHMM: number;
   winSillMM: number;
+  openWMM: number;
+  openHMM: number;
   selOpening2D: { wi: number; idx: number } | null;
   gridMajor: number;
   gridOpacity: number;

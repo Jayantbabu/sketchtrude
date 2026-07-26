@@ -107,9 +107,12 @@ export function initMeasure() {
     const midY = ((state.pendingScaleStart as any).y + (state.pendingScaleEnd as any).y) / 2;
     const sx = midX / S.doc.wPx * rect.width + rect.left;
     const sy = midY / S.doc.hPx * rect.height + rect.top;
-    const areaRect = S.area.getBoundingClientRect();
-    S.scalePrompt.style.left = Math.min(areaRect.width - 260, Math.max(20, sx - areaRect.left + 20)) + 'px';
-    S.scalePrompt.style.top = Math.max(20, sy - areaRect.top - 120) + 'px';
+    // #scale-prompt is position:fixed — use viewport coords; place well above the stroke for stylus use
+    const promptW = 280;
+    const left = Math.min(window.innerWidth - promptW - 16, Math.max(16, sx - promptW / 2));
+    const top = Math.max(16, sy - 220);
+    S.scalePrompt.style.left = left + 'px';
+    S.scalePrompt.style.top = top + 'px';
     const inp = $el('scale-length');
     inp.value = '';
     setTimeout(() => inp.focus(), 30);

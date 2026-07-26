@@ -47,7 +47,10 @@ export function initRooms() {
   S.flashSnap = function flashSnap(kind: any) {
     const b = $el('snap-badge');
     if (!b) return;
-    b.textContent = kind === 'grid' ? '\u2610 GRID SNAP' : '\u2610 CORNER SNAP';
+    b.textContent = kind === 'grid' ? '\u2610 GRID SNAP'
+      : kind === 'angle' ? '\u2610 ANGLE SNAP'
+      : kind === 'straight' ? '\u2610 STRAIGHT SNAP'
+      : '\u2610 CORNER SNAP';
     b.classList.add('show');
     clearTimeout(state._snapBadgeT);
     state._snapBadgeT = setTimeout(() => b.classList.remove('show'), 650);
@@ -111,31 +114,48 @@ export function initRooms() {
   }
 
   S.commitWall = function commitWall(closed: any) {
+    // Legacy polyline commit → explode into independent Keyplan segments
     const pts = state.polyPoints.slice();
     if (pts.length < 2) { S.cancelPoly(); return; }
     if (closed && pts.length >= 3 &&
         (pts[0].x !== pts[pts.length - 1].x || pts[0].y !== pts[pts.length - 1].y)) {
-      pts.push({ x: pts[0].x, y: pts[0].y });   // seal the loop
+      pts.push({ x: pts[0].x, y: pts[0].y });
     }
     const __b = S.vectorSnapshot();
-    const wall: any = { pts, thickMM: state.wallThickMM, heightM: state.wallHeightM };
-    S.ensureWallId(wall);
-    const n = (state.walls || []).length + 1;
-    const isClosed = !!(closed && pts.length >= 3 &&
-      pts[0].x === pts[pts.length - 1].x && pts[0].y === pts[pts.length - 1].y);
-    wall.name = isClosed ? ('Room ' + n) : ('Wall ' + n);
-    state.walls.push(wall);
-    // Vector-only: do not bake a centerline onto the sketch canvas — that line
-    // ghosts when the wall is moved or its layer visibility is toggled off.
+    const sealed = pts.length > 2 &&
+      Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y) < 0.5;
+    const last = sealed ? pts.length - 1 : pts.length - 1;
+    const end = sealed ? pts.length - 1 : pts.length;
+    for (let i = 0; i < end - (sealed ? 1 : 0) && i < pts.length - 1; i++) {
+      if (sealed && i === pts.length - 2) continue; // skip zero seal edge if duplicate
+      const a = pts[i], b = pts[i + 1];
+      if (Math.hypot(b.x - a.x, b.y - a.y) < 2) continue;
+      if (typeof S.commitWallSegment === 'function') {
+        // commitWallSegment records its own undo — batch via outer snapshot only once
+        const wall: any = {
+          pts: [{ x: a.x, y: a.y }, { x: b.x, y: b.y }],
+          thickMM: state.wallThickMM,
+          heightM: state.wallHeightM,
+          openings: [],
+          bulge: 0,
+          roomId: null,
+        };
+        S.ensureWallId(wall);
+        wall.name = 'Wall ' + ((state.walls || []).length + 1);
+        state.walls.push(wall);
+      }
+    }
     state.polyPoints = [];
     state.polyActive = false;
-    $el('poly-hint').style.display = 'none';
+    const ph = $el('poly-hint');
+    if (ph) ph.style.display = 'none';
+    if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms();
     S.refreshMeasurements();
     S.syncWallsToMasses();
-    S.registerWallInLayerPanel(wall);
+    if (typeof S.syncWallRoomsToLayerPanel === 'function') S.syncWallRoomsToLayerPanel();
     S.recordVec(__b);
     S.scheduleAutosave();
-    S.showHint(`Wall added · ${state.wallThickMM} mm \u00d7 ${state.wallHeightM} m · view in 3D`);
+    S.showHint(`Walls added · ${state.wallThickMM} mm × ${state.wallHeightM} m`);
   }
 
   S.cancelPoly = function cancelPoly() {
@@ -377,43 +397,98 @@ export function initRooms() {
     S._ovLine(J0.x - px*g, J0.y - py*g, J1.x - px*g, J1.y - py*g, '#4a6b8a', 1);
   }
 
-  /** Whether a room wall segment should draw (LayerEngine per-face visibility). */
+  /**
+   * Whether a wall segment should draw. Uses LayerEngine effective visibility so a
+   * hidden Room also hides the walls nested under it.
+   */
   S.isWallSegmentVisible = function isWallSegmentVisible(wall: any, seg: any) {
     if (!wall || wall.visible === false) return false;
     if (!S.layerEngine || !wall.id) return true;
     const face = S.findEngineObjectByLegacy(
       (r: any) => r.kind === 'wall-face' && r.wallId === wall.id && r.seg === seg,
     );
-    if (!face) return true;
-    return S.layerEngine.isEffectivelyVisible(face.id);
+    if (face) return S.layerEngine.isEffectivelyVisible(face.id);
+    const obj = S.findEngineObjectByLegacy((r: any) => r.kind === 'wall' && r.id === wall.id);
+    if (!obj) return true;
+    return S.layerEngine.isEffectivelyVisible(obj.id);
   };
 
   // Render one wall: poché + double-lines, broken at openings, with door/window symbols.
+  // Supports curved walls via bulge (sampled centerline).
   S.renderOneWall = function renderOneWall(w: any, svgns: any, wi: any) {
-    const pts = w.pts;
-    if (!pts || pts.length < 2) return;
+    const rawPts = w.pts;
+    if (!rawPts || rawPts.length < 2) return;
+    const bulge = typeof S.wallBulge === 'function' ? S.wallBulge(w) : 0;
+    const center = (typeof S.wallCenterlinePts === 'function' && bulge)
+      ? S.wallCenterlinePts(w)
+      : rawPts;
     const tPx = S.wallThickPx(w), h = tPx / 2;
-    const n = pts.length;
-    const closed = n > 2 && pts[0].x === pts[n - 1].x && pts[0].y === pts[n - 1].y;
+    const n = center.length;
+    const closed = !bulge && rawPts.length > 2 && rawPts[0].x === rawPts[rawPts.length - 1].x && rawPts[0].y === rawPts[rawPts.length - 1].y;
     const segs = n - 1;
     const ppm = S.pxPerMetre();
-    const wallSelected = state.sel && state.sel.type === 'wall' && state.sel.wi === wi;
+    const wallSelected = state.sel && state.sel.type === 'wall' && (
+      state.sel.wi === wi || (state.sel.id && w.id && state.sel.id === w.id)
+    );
     const selSeg = wallSelected ? state.sel.seg : undefined;
+    // Ends that meet another wall get filled corners instead of a closing cap.
+    const joinStart = typeof S.wallEndJoined === 'function' ? S.wallEndJoined(w, 'a') : false;
+    const joinEnd = typeof S.wallEndJoined === 'function' ? S.wallEndJoined(w, 'b') : false;
+    let hasVisibleSegment = false;
+
+    // Total arc/chord length for opening param and length label
+    let totalLen = 0;
+    const segLens: number[] = [];
     for (let i = 0; i < segs; i++) {
-      if (!S.isWallSegmentVisible(w, i)) continue;
-      // Highlight only the selected face when a segment is active; whole room if Room is selected.
-      const selThis = wallSelected && (typeof selSeg !== 'number' || selSeg === i);
+      const L = Math.hypot(center[i + 1].x - center[i].x, center[i + 1].y - center[i].y);
+      segLens.push(L);
+      totalLen += L;
+    }
+
+    // Map openings (stored on host seg index, usually 0) onto distance along centerline
+    const hostSeg = 0;
+    const opsAll = (w.openings || []).map((o: any, idx: any) => ({ o, idx })).filter((x: any) => (x.o.seg ?? 0) === hostSeg || !bulge);
+    // For multi-seg legacy polylines without bulge, keep per-seg openings
+    const openingsBySeg: any[][] = [];
+    for (let i = 0; i < segs; i++) openingsBySeg[i] = [];
+    if (bulge || (rawPts.length <= 2)) {
+      opsAll.forEach((x: any) => {
+        const half = (x.o.wMM / 1000 * ppm) / 2;
+        const c = (x.o.t || 0) * totalLen;
+        openingsBySeg[0].push({ o: x.o, idx: x.idx, d0: Math.max(0, c - half), d1: Math.min(totalLen, c + half), alongTotal: true });
+      });
+    }
+
+    for (let i = 0; i < segs; i++) {
+      if (!S.isWallSegmentVisible(w, bulge ? 0 : i)) continue;
+      hasVisibleSegment = true;
+      const selThis = wallSelected && (typeof selSeg !== 'number' || selSeg === i || bulge || rawPts.length <= 2);
       const wFill = selThis ? 'rgba(160,40,53,0.32)' : 'rgba(48,48,52,0.82)';
       const wcol = selThis ? '#a02835' : '#161616';
-      const a = pts[i], b = pts[i + 1];
+      const a = center[i], b = center[i + 1];
       const dx = b.x - a.x, dy = b.y - a.y, segLen = Math.hypot(dx, dy) || 1e-6;
       const ux = dx / segLen, uy = dy / segLen, px = -uy, py = ux;
-      const sIn = closed || i > 0, eIn = closed || i < segs - 1;
-      const ops = (w.openings || []).map((o: any, idx: any) => ({ o, idx })).filter((x: any) => x.o.seg === i).map((x: any) => {
-        const half = (x.o.wMM / 1000 * ppm) / 2, c = x.o.t * segLen;
-        return { o: x.o, idx: x.idx, d0: Math.max(0, c - half), d1: Math.min(segLen, c + half) };
-      }).sort((A: any, B: any) => A.d0 - B.d0);
-      // solid spans = segment minus opening intervals
+      const sIn = closed || i > 0 || joinStart;
+      const eIn = closed || i < segs - 1 || joinEnd;
+
+      let ops;
+      if (bulge || rawPts.length <= 2) {
+        // Accumulate distance before this sample
+        let before = 0;
+        for (let k = 0; k < i; k++) before += segLens[k];
+        const after = before + segLen;
+        ops = (openingsBySeg[0] || []).filter((op: any) => op.d1 > before && op.d0 < after).map((op: any) => ({
+          o: op.o, idx: op.idx,
+          d0: Math.max(0, op.d0 - before),
+          d1: Math.min(segLen, op.d1 - before),
+        })).filter((op: any) => op.d1 > op.d0 + 0.5);
+      } else {
+        ops = (w.openings || []).map((o: any, idx: any) => ({ o, idx })).filter((x: any) => x.o.seg === i).map((x: any) => {
+          const half = (x.o.wMM / 1000 * ppm) / 2, c = x.o.t * segLen;
+          return { o: x.o, idx: x.idx, d0: Math.max(0, c - half), d1: Math.min(segLen, c + half) };
+        }).sort((A: any, B: any) => A.d0 - B.d0);
+      }
+
       const spans = []; let cur = 0;
       ops.forEach((op: any) => { if (op.d0 > cur) spans.push([cur, op.d0]); cur = Math.max(cur, op.d1); });
       if (cur < segLen) spans.push([cur, segLen]);
@@ -426,9 +501,11 @@ export function initRooms() {
         poly.setAttribute('fill', wFill); poly.setAttribute('stroke', 'none');
         S.rulerOverlay.appendChild(poly);
         const ls = s0 + (startJoint ? h : 0), le = s1 - (endJoint ? h : 0);
-        const Ax = a.x + ux*ls, Ay = a.y + uy*ls, Bx = a.x + ux*le, By = a.y + uy*le;
-        S._ovLine(Ax + px*h, Ay + py*h, Bx + px*h, By + py*h, wcol, 1.5);
-        S._ovLine(Ax - px*h, Ay - py*h, Bx - px*h, By - py*h, wcol, 1.5);
+        if (le > ls) {
+          const Ax = a.x + ux*ls, Ay = a.y + uy*ls, Bx = a.x + ux*le, By = a.y + uy*le;
+          S._ovLine(Ax + px*h, Ay + py*h, Bx + px*h, By + py*h, wcol, 1.5);
+          S._ovLine(Ax - px*h, Ay - py*h, Bx - px*h, By - py*h, wcol, 1.5);
+        }
         if (s0 <= 0.01 && !sIn) S._ovLine(a.x + px*h, a.y + py*h, a.x - px*h, a.y - py*h, wcol, 1.5);
         if (s1 >= segLen - 0.01 && !eIn) S._ovLine(b.x + px*h, b.y + py*h, b.x - px*h, b.y - py*h, wcol, 1.5);
       });
@@ -439,10 +516,183 @@ export function initRooms() {
         S._ovLine(J0.x + px*h, J0.y + py*h, J0.x - px*h, J0.y - py*h, col, 1.6);
         S._ovLine(J1.x + px*h, J1.y + py*h, J1.x - px*h, J1.y - py*h, col, 1.6);
         if (op.o.kind === 'door') S.drawDoorSymbol(op.o, J0, J1, px, py, col);
-        else S.drawWindowSymbol(op.o, J0, J1, px, py, h, col);
+        else if (op.o.kind === 'window') S.drawWindowSymbol(op.o, J0, J1, px, py, h, col);
       });
     }
+
+    // Queue labels so every wall is painted before any label. This keeps labels
+    // readable at intersections and prevents hidden room walls leaving text behind.
+    if (hasVisibleSegment && totalLen > 20) {
+      const a0 = center[0], b0 = center[center.length - 1];
+      const mid = bulge
+        ? center[Math.floor(center.length / 2)]
+        : { x: (a0.x + b0.x) / 2, y: (a0.y + b0.y) / 2 };
+      const dx = b0.x - a0.x, dy = b0.y - a0.y, L = Math.hypot(dx, dy) || 1;
+      const nx = -dy / L, ny = dx / L;
+      const label = S.formatLen(totalLen);
+      const lx = mid.x + nx * (h + 14), ly = mid.y + ny * (h + 14);
+      S._wallLengthLabels = S._wallLengthLabels || [];
+      S._wallLengthLabels.push({ x: lx, y: ly, text: label });
+    }
+
+    // Thickness label on free walls (both ends) when selected — skip for clutter
   }
+
+  S.renderWallLengthLabels = function renderWallLengthLabels() {
+    const svgns = S._SVGNS;
+    (S._wallLengthLabels || []).forEach((label: any) => {
+      const t = document.createElementNS(svgns, 'text');
+      t.setAttribute('x', String(label.x)); t.setAttribute('y', String(label.y));
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('fill', '#555');
+      t.setAttribute('stroke', 'rgba(255,255,255,0.96)');
+      t.setAttribute('stroke-width', '5');
+      t.setAttribute('stroke-linejoin', 'round');
+      t.setAttribute('paint-order', 'stroke');
+      t.setAttribute('font-size', '12');
+      t.setAttribute('font-family', 'JetBrains Mono,monospace');
+      t.setAttribute('pointer-events', 'none');
+      t.textContent = label.text;
+      S.rulerOverlay.appendChild(t);
+    });
+    S._wallLengthLabels = [];
+  }
+
+  /** Area centroid of a polygon — sits at the visual middle, unlike a vertex average. */
+  S.polygonCentroid = function polygonCentroid(pts: any) {
+    if (!pts || !pts.length) return { x: 0, y: 0 };
+    let twiceArea = 0, cx = 0, cy = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], b = pts[(i + 1) % pts.length];
+      const cross = a.x * b.y - b.x * a.y;
+      twiceArea += cross;
+      cx += (a.x + b.x) * cross;
+      cy += (a.y + b.y) * cross;
+    }
+    if (Math.abs(twiceArea) < 1e-6) {
+      let sx = 0, sy = 0;
+      pts.forEach((p: any) => { sx += p.x; sy += p.y; });
+      return { x: sx / pts.length, y: sy / pts.length };
+    }
+    return { x: cx / (3 * twiceArea), y: cy / (3 * twiceArea) };
+  };
+
+  S.renderWallRoomLabels = function renderWallRoomLabels() {
+    const rooms = state.wallRooms || [];
+    if (!rooms.length) return;
+    const svgns = S._SVGNS;
+    rooms.forEach((r: any) => {
+      const poly = typeof S.cyclePolygon === 'function' ? S.cyclePolygon(r.wallIds || []) : null;
+      if (!poly || poly.length < 3) return;
+      const hidden = (r.wallIds || []).every((id: string) => {
+        const w = (state.walls || []).find((x: any) => x && x.id === id);
+        return !w || !S.isWallSegmentVisible(w, 0);
+      });
+      if (hidden) return;
+      const centroid = S.polygonCentroid(poly);
+      const cx = centroid.x, cy = centroid.y;
+      const areaLabel = S.formatArea(r.areaPx2 || S.shoelaceArea(poly));
+      const name = r.name || 'Room';
+      const g = document.createElementNS(svgns, 'g');
+      g.setAttribute('pointer-events', 'none');
+      const t1 = document.createElementNS(svgns, 'text');
+      t1.setAttribute('x', String(cx)); t1.setAttribute('y', String(cy - 8));
+      t1.setAttribute('text-anchor', 'middle');
+      t1.setAttribute('fill', '#222');
+      t1.setAttribute('font-size', '15');
+      t1.setAttribute('font-weight', '700');
+      t1.setAttribute('font-family', 'ui-sans-serif,system-ui');
+      t1.textContent = name;
+      g.appendChild(t1);
+      const t2 = document.createElementNS(svgns, 'text');
+      t2.setAttribute('x', String(cx)); t2.setAttribute('y', String(cy + 12));
+      t2.setAttribute('text-anchor', 'middle');
+      t2.setAttribute('fill', '#666');
+      t2.setAttribute('font-size', '13');
+      t2.setAttribute('font-family', 'JetBrains Mono,monospace');
+      t2.textContent = areaLabel;
+      g.appendChild(t2);
+      S.rulerOverlay.appendChild(g);
+    });
+  };
+
+  S.renderWallBulgeHandles = function renderWallBulgeHandles() {
+    const sel: any = state.sel;
+    if (!sel || sel.type !== 'wall') return;
+    let wi = typeof sel.wi === 'number' ? sel.wi : -1;
+    if (wi < 0 && sel.id) wi = (state.walls || []).findIndex((w: any) => w && w.id === sel.id);
+    const w = state.walls[wi];
+    if (!w || !w.pts || w.pts.length < 2) return;
+    const hp = typeof S.bulgeHandlePoint === 'function' ? S.bulgeHandlePoint(w) : null;
+    if (!hp) return;
+    const svgns = S._SVGNS;
+    const line = document.createElementNS(svgns, 'line');
+    line.setAttribute('x1', String(hp.mid.x)); line.setAttribute('y1', String(hp.mid.y));
+    line.setAttribute('x2', String(hp.x)); line.setAttribute('y2', String(hp.y));
+    line.setAttribute('stroke', '#a02835'); line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('stroke-dasharray', '4 3');
+    line.setAttribute('pointer-events', 'none');
+    S.rulerOverlay.appendChild(line);
+    const c = document.createElementNS(svgns, 'circle');
+    c.setAttribute('cx', String(hp.x)); c.setAttribute('cy', String(hp.y));
+    c.setAttribute('r', '8');
+    c.setAttribute('fill', '#fff');
+    c.setAttribute('stroke', '#a02835');
+    c.setAttribute('stroke-width', '2.5');
+    c.setAttribute('data-bulge-handle', String(wi));
+    c.style.cursor = 'grab';
+    S.rulerOverlay.appendChild(c);
+  };
+
+  S.bulgeHandleHit = function bulgeHandleHit(p: any) {
+    const sel: any = state.sel;
+    if (!sel || sel.type !== 'wall') return null;
+    let wi = typeof sel.wi === 'number' ? sel.wi : -1;
+    if (wi < 0 && sel.id) wi = (state.walls || []).findIndex((w: any) => w && w.id === sel.id);
+    const w = state.walls[wi];
+    if (!w) return null;
+    const hp = typeof S.bulgeHandlePoint === 'function' ? S.bulgeHandlePoint(w) : null;
+    if (!hp) return null;
+    const scale = (state.zoom || 1) * (state.baseZoom || 1);
+    if (Math.hypot(p.x - hp.x, p.y - hp.y) < 14 / scale) return { wi, wall: w, hp };
+    return null;
+  };
+
+  S.beginBulgeDrag = function beginBulgeDrag(wi: any) {
+    const w = state.walls[wi];
+    if (!w) return;
+    state._bulgeDrag = { wi, before: S.vectorSnapshot() };
+  };
+
+  S.applyBulgeDragAt = function applyBulgeDragAt(p: any) {
+    const d = state._bulgeDrag;
+    if (!d) return;
+    const w = state.walls[d.wi];
+    if (!w || !w.pts || w.pts.length < 2) return;
+    const a = w.pts[0], b = w.pts[w.pts.length - 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const chord = Math.hypot(dx, dy) || 1;
+    const nx = -dy / chord, ny = dx / chord;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    let bulge = (p.x - mid.x) * nx + (p.y - mid.y) * ny;
+    // Clamp so arc stays reasonable
+    const maxB = chord * 0.85;
+    bulge = Math.max(-maxB, Math.min(maxB, bulge));
+    if (Math.abs(bulge) < 2) bulge = 0;
+    w.bulge = bulge;
+    S.refreshMeasurements();
+    S.syncWallsToMasses();
+  };
+
+  S.endBulgeDrag = function endBulgeDrag() {
+    const d = state._bulgeDrag;
+    if (!d) return;
+    if (d.before) S.recordVec(d.before);
+    state._bulgeDrag = null;
+    if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms();
+    S.scheduleAutosave();
+    S.showHint('Wall curve updated · drag handle to zero to straighten');
+  };
 
   S.renderShapes2D = function renderShapes2D() {
     const svgns = 'http://www.w3.org/2000/svg';
@@ -518,10 +768,14 @@ export function initRooms() {
     if (state.wallsVisible === false) return;
     if (!state.walls || !state.walls.length) return;
     const svgns = S._SVGNS;
+    S._wallLengthLabels = [];
     state.walls.forEach((w: any, wi: any) => {
       if (w.visible === false) return;
       S.renderOneWall(w, svgns, wi);
     });
+    S.renderWallLengthLabels();
+    if (typeof S.renderWallRoomLabels === 'function') S.renderWallRoomLabels();
+    if (typeof S.renderWallBulgeHandles === 'function') S.renderWallBulgeHandles();
   }
 
   // Rebuild extruded wall masses from the 2D walls (carrying openings) so they appear & cut in 3D.
@@ -563,15 +817,22 @@ export function initRooms() {
     (state.walls || []).forEach((w: any, wi: any) => {
       if (w.visible === false) return;
       const tW = (w.thickMM || 230) / 1000;
-      const pts = w.pts || [];
+      const bulge = typeof S.wallBulge === 'function' ? S.wallBulge(w) : 0;
+      const pts = bulge && typeof S.wallCenterlinePts === 'function'
+        ? S.wallCenterlinePts(w)
+        : (w.pts || []);
       for (let i = 0; i < pts.length - 1; i++) {
-        if (typeof S.isWallSegmentVisible === 'function' && !S.isWallSegmentVisible(w, i)) continue;
+        if (typeof S.isWallSegmentVisible === 'function' && !S.isWallSegmentVisible(w, bulge ? 0 : i)) continue;
         const a = { x: (pts[i].x - ax) / ppm, z: (pts[i].y - ay) / ppm };
         const b = { x: (pts[i + 1].x - ax) / ppm, z: (pts[i + 1].y - ay) / ppm };
+        // Openings only on first sample for arcs (approx center); on matching seg for polylines
+        const openings = bulge
+          ? (i === Math.floor((pts.length - 1) / 2) ? (w.openings || []).filter((o: any) => (o.seg ?? 0) === 0) : [])
+          : (w.openings || []).filter((o: any) => o.seg === i);
         planned.push({
           wi, seg: i, a, b, tW, h: (w.heightM || 3),
           poly: S.wallSegPoly(a, b, tW),
-          openings: (w.openings || []).filter((o: any) => o.seg === i),
+          openings,
           wallKey: wi + ':' + i,
         });
       }
@@ -620,21 +881,34 @@ export function initRooms() {
     (state.walls || []).forEach((w: any, wi: any) => {
       if (w.visible === false) return;
       const tPx = S.wallThickPx(w);
-      for (let i = 0; i < w.pts.length - 1; i++) {
-        if (typeof S.isWallSegmentVisible === 'function' && !S.isWallSegmentVisible(w, i)) continue;
-        const a = w.pts[i], b = w.pts[i + 1];
+      const bulge = typeof S.wallBulge === 'function' ? S.wallBulge(w) : 0;
+      const pts = bulge && typeof S.wallCenterlinePts === 'function' ? S.wallCenterlinePts(w) : (w.pts || []);
+      let total = 0;
+      const lens: number[] = [];
+      for (let i = 0; i < pts.length - 1; i++) {
+        const L = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+        lens.push(L); total += L;
+      }
+      let acc = 0;
+      for (let i = 0; i < pts.length - 1; i++) {
+        if (typeof S.isWallSegmentVisible === 'function' && !S.isWallSegmentVisible(w, bulge ? 0 : i)) continue;
+        const a = pts[i], b = pts[i + 1];
         const dx = b.x - a.x, dy = b.y - a.y, len2 = dx*dx + dy*dy || 1;
         let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2; t = Math.max(0, Math.min(1, t));
         const cx = a.x + dx*t, cy = a.y + dy*t, d = Math.hypot(p.x - cx, p.y - cy);
-        if (d < tPx/2 + 14 && (!best || d < best.d)) best = { wi, seg: i, t, d, segLen: Math.hypot(dx, dy) };
+        if (d < tPx/2 + 14 && (!best || d < best.d)) {
+          const along = (acc + t * lens[i]) / Math.max(1, total);
+          best = { wi, seg: bulge || pts.length <= 2 ? 0 : i, t: bulge || pts.length <= 2 ? along : t, d, segLen: total || Math.hypot(dx, dy) };
+        }
+        acc += lens[i];
       }
     });
     return best;
   }
   S.openingDims = function openingDims(kind: any) {
-    return kind === 'door'
-      ? { wMM: state.doorWMM, hMM: state.doorHMM, sillMM: 0 }
-      : { wMM: state.winWMM, hMM: state.winHMM, sillMM: state.winSillMM };
+    if (kind === 'door') return { wMM: state.doorWMM, hMM: state.doorHMM, sillMM: 0 };
+    if (kind === 'opening') return { wMM: state.openWMM || 900, hMM: state.openHMM || 2100, sillMM: 0 };
+    return { wMM: state.winWMM, hMM: state.winHMM, sillMM: state.winSillMM };
   }
   S.placeOpening2D = function placeOpening2D(p: any) {
     const hit = S.wallSegHit(p);
@@ -648,16 +922,37 @@ export function initRooms() {
     w.openings = w.openings || [];
     w.openings.push({ kind: state.openingKind, seg: hit.seg, t, wMM: dims.wMM, hMM: dims.hMM, sillMM: dims.sillMM, hand: 1, swing: 1 });
     state.selOpening2D = { wi: hit.wi, idx: w.openings.length - 1 };
-    S.refreshMeasurements(); S.syncWallsToMasses(); S.updateOpeningPalette(); S.recordVec(__b); S.scheduleAutosave();
-    S.showHint(`${state.openingKind === 'door' ? 'Door' : 'Window'} placed · drag to slide · flip & resize in the bar`);
+    state.sel = { type: 'opening', wi: hit.wi, idx: w.openings.length - 1 };
+    S.refreshMeasurements(); S.syncWallsToMasses(); S.updateOpeningPalette();
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
+    S.recordVec(__b); S.scheduleAutosave();
+    const label = state.openingKind === 'door' ? 'Door' : state.openingKind === 'window' ? 'Window' : 'Opening';
+    S.showHint(`${label} placed · drag to slide · edit in the bar`);
   }
   S.openingHitTest2D = function openingHitTest2D(p: any) {
     if (state.wallsVisible === false) return null;
     let best: any = null;
     (state.walls || []).forEach((w: any, wi: any) => {
       (w.openings || []).forEach((o: any, idx: any) => {
-        const a = w.pts[o.seg], b = w.pts[o.seg + 1]; if (!a || !b) return;
-        const cx = a.x + (b.x - a.x) * o.t, cy = a.y + (b.y - a.y) * o.t, d = Math.hypot(p.x - cx, p.y - cy);
+        const bulge = typeof S.wallBulge === 'function' ? S.wallBulge(w) : 0;
+        const pts = bulge && typeof S.wallCenterlinePts === 'function' ? S.wallCenterlinePts(w) : (w.pts || []);
+        if (pts.length < 2) return;
+        // Position along total length at o.t
+        let total = 0;
+        for (let i = 0; i < pts.length - 1; i++) total += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+        const target = (o.t || 0) * total;
+        let acc = 0, cx = pts[0].x, cy = pts[0].y;
+        for (let i = 0; i < pts.length - 1; i++) {
+          const L = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) || 1;
+          if (acc + L >= target || i === pts.length - 2) {
+            const u = Math.max(0, Math.min(1, (target - acc) / L));
+            cx = pts[i].x + (pts[i + 1].x - pts[i].x) * u;
+            cy = pts[i].y + (pts[i + 1].y - pts[i].y) * u;
+            break;
+          }
+          acc += L;
+        }
+        const d = Math.hypot(p.x - cx, p.y - cy);
         if (d < S.wallThickPx(w)/2 + 12 && (!best || d < best.d)) best = { wi, idx, d };
       });
     });
@@ -666,11 +961,28 @@ export function initRooms() {
   S.slideOpening2D = function slideOpening2D(sel: any, p: any) {
     const w = state.walls[sel.wi]; if (!w) return;
     const o: any = w.openings?.[sel.idx]; if (!o) return;
-    const a = w.pts[o.seg], b = w.pts[o.seg + 1];
-    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx*dx + dy*dy || 1, segLen = Math.sqrt(len2);
-    let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
-    const halfFrac = ((o.wMM / 1000) * S.pxPerMetre() / 2) / Math.max(1, segLen);
-    o.t = Math.max(halfFrac + 0.02, Math.min(1 - halfFrac - 0.02, t));
+    const bulge = typeof S.wallBulge === 'function' ? S.wallBulge(w) : 0;
+    const pts = bulge && typeof S.wallCenterlinePts === 'function' ? S.wallCenterlinePts(w) : (w.pts || []);
+    if (pts.length < 2) return;
+    // Project onto nearest centerline sample
+    let bestT = 0, bestD = Infinity, total = 0;
+    const lens: number[] = [];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const L = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+      lens.push(L); total += L;
+    }
+    let acc = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y, len2 = dx*dx + dy*dy || 1;
+      let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2; t = Math.max(0, Math.min(1, t));
+      const cx = a.x + dx*t, cy = a.y + dy*t, d = Math.hypot(p.x - cx, p.y - cy);
+      if (d < bestD) { bestD = d; bestT = (acc + t * lens[i]) / Math.max(1, total); }
+      acc += lens[i];
+    }
+    const halfFrac = ((o.wMM / 1000) * S.pxPerMetre() / 2) / Math.max(1, total);
+    o.t = Math.max(halfFrac + 0.02, Math.min(1 - halfFrac - 0.02, bestT));
+    o.seg = 0;
     S.refreshMeasurements(); S.syncWallsToMasses();
   }
   S.deleteOpening2D = function deleteOpening2D(sel: any) {
@@ -716,17 +1028,18 @@ export function initRooms() {
     const el = document.createElement('div');
     el.id = 'opening-palette';
     el.style.cssText = 'position:fixed;top:64px;left:50%;transform:translateX(-50%);display:none;gap:9px;align-items:center;flex-wrap:wrap;max-width:94vw;background:rgba(255,255,255,0.97);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);border:1px solid rgba(0,0,0,0.10);border-radius:10px;padding:7px 12px;box-shadow:0 6px 22px rgba(0,0,0,0.16);z-index:31;font-size:11px;';
-    el.innerHTML = '<div style="display:flex;gap:4px;"><button id="op-door" class="op-chip">Door</button><button id="op-window" class="op-chip">Window</button></div>'
+    el.innerHTML = '<div style="display:flex;gap:4px;"><button id="op-door" class="op-chip">Door</button><button id="op-window" class="op-chip">Window</button><button id="op-opening" class="op-chip">Opening</button></div>'
       + '<label style="display:flex;align-items:center;gap:4px;color:#555;">W <input id="op-w" type="number" step="10" style="width:54px;font-size:11px;padding:3px 4px;border:1px solid #ccc;border-radius:5px;"> mm</label>'
       + '<label style="display:flex;align-items:center;gap:4px;color:#555;">H <input id="op-h" type="number" step="10" style="width:54px;font-size:11px;padding:3px 4px;border:1px solid #ccc;border-radius:5px;"> mm</label>'
       + '<label id="op-sill-l" style="display:flex;align-items:center;gap:4px;color:#555;">Sill <input id="op-sill" type="number" step="10" style="width:50px;font-size:11px;padding:3px 4px;border:1px solid #ccc;border-radius:5px;"> mm</label>'
       + '<button id="op-hinge" class="op-mini">\u21c4 Hinge</button><button id="op-swing" class="op-mini">\u21c5 Swing</button>'
       + '<button id="op-del" class="op-mini" style="color:#b00020;">Delete</button>';
     document.body.appendChild(el);
-    (el.querySelector as any)('#op-door').onclick = () => { state.openingKind = 'door'; if (S.selectedOpening2D()) { const __b = S.vectorSnapshot(); S.selectedOpening2D().kind = 'door'; S.refreshMeasurements(); S.syncWallsToMasses(); S.recordVec(__b, true); } S.updateOpeningPalette(); };
-    (el.querySelector as any)('#op-window').onclick = () => { state.openingKind = 'window'; if (S.selectedOpening2D()) { const __b = S.vectorSnapshot(); S.selectedOpening2D().kind = 'window'; S.refreshMeasurements(); S.syncWallsToMasses(); S.recordVec(__b, true); } S.updateOpeningPalette(); };
-    (el.querySelector as any)('#op-w').addEventListener('input', (e: any) => { const v = parseFloat(e.target.value); if (!(v > 0)) return; const o = S.selectedOpening2D(); const __b = o ? S.vectorSnapshot() : null; if (o) o.wMM = v; else if (state.openingKind === 'door') state.doorWMM = v; else state.winWMM = v; S.refreshMeasurements(); S.syncWallsToMasses(); if (__b) S.recordVec(__b, true); });
-    (el.querySelector as any)('#op-h').addEventListener('input', (e: any) => { const v = parseFloat(e.target.value); if (!(v > 0)) return; const o = S.selectedOpening2D(); const __b = o ? S.vectorSnapshot() : null; if (o) o.hMM = v; else if (state.openingKind === 'door') state.doorHMM = v; else state.winHMM = v; S.syncWallsToMasses(); if (__b) S.recordVec(__b, true); });
+    (el.querySelector as any)('#op-door').onclick = () => { state.openingKind = 'door'; if (S.selectedOpening2D()) { const __b = S.vectorSnapshot(); S.selectedOpening2D().kind = 'door'; S.refreshMeasurements(); S.syncWallsToMasses(); S.recordVec(__b, true); } S.updateOpeningPalette(); if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar(); };
+    (el.querySelector as any)('#op-window').onclick = () => { state.openingKind = 'window'; if (S.selectedOpening2D()) { const __b = S.vectorSnapshot(); S.selectedOpening2D().kind = 'window'; S.refreshMeasurements(); S.syncWallsToMasses(); S.recordVec(__b, true); } S.updateOpeningPalette(); if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar(); };
+    (el.querySelector as any)('#op-opening').onclick = () => { state.openingKind = 'opening'; if (S.selectedOpening2D()) { const __b = S.vectorSnapshot(); S.selectedOpening2D().kind = 'opening'; S.refreshMeasurements(); S.syncWallsToMasses(); S.recordVec(__b, true); } S.updateOpeningPalette(); if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar(); };
+    (el.querySelector as any)('#op-w').addEventListener('input', (e: any) => { const v = parseFloat(e.target.value); if (!(v > 0)) return; const o = S.selectedOpening2D(); const __b = o ? S.vectorSnapshot() : null; if (o) o.wMM = v; else if (state.openingKind === 'door') state.doorWMM = v; else if (state.openingKind === 'window') state.winWMM = v; else state.openWMM = v; S.refreshMeasurements(); S.syncWallsToMasses(); if (__b) S.recordVec(__b, true); });
+    (el.querySelector as any)('#op-h').addEventListener('input', (e: any) => { const v = parseFloat(e.target.value); if (!(v > 0)) return; const o = S.selectedOpening2D(); const __b = o ? S.vectorSnapshot() : null; if (o) o.hMM = v; else if (state.openingKind === 'door') state.doorHMM = v; else if (state.openingKind === 'window') state.winHMM = v; else state.openHMM = v; S.syncWallsToMasses(); if (__b) S.recordVec(__b, true); });
     (el.querySelector as any)('#op-sill').addEventListener('input', (e: any) => { const v = parseFloat(e.target.value); if (!(v >= 0)) return; const o = S.selectedOpening2D(); const __b = o ? S.vectorSnapshot() : null; if (o) o.sillMM = v; else state.winSillMM = v; S.syncWallsToMasses(); if (__b) S.recordVec(__b, true); });
     (el.querySelector as any)('#op-hinge').onclick = () => { const o = S.selectedOpening2D(); if (o) { const __b = S.vectorSnapshot(); o.hand = -(o.hand || 1); S.refreshMeasurements(); S.recordVec(__b, true); } };
     (el.querySelector as any)('#op-swing').onclick = () => { const o = S.selectedOpening2D(); if (o) { const __b = S.vectorSnapshot(); o.swing = -(o.swing || 1); S.refreshMeasurements(); S.recordVec(__b, true); } };
@@ -749,6 +1062,8 @@ export function initRooms() {
     const kind = o ? o.kind : state.openingKind;
     (S._openPaletteEl.querySelector as any)('#op-door').classList.toggle('on', kind === 'door');
     (S._openPaletteEl.querySelector as any)('#op-window').classList.toggle('on', kind === 'window');
+    const opChip = S._openPaletteEl.querySelector('#op-opening');
+    if (opChip) opChip.classList.toggle('on', kind === 'opening');
     const dims = o ? { wMM: o.wMM, hMM: o.hMM, sillMM: o.sillMM } : S.openingDims(kind);
     (S._openPaletteEl.querySelector as any)('#op-w').value = dims.wMM;
     (S._openPaletteEl.querySelector as any)('#op-h').value = dims.hMM;
@@ -786,7 +1101,7 @@ export function initRooms() {
       S.showSelectBar(null); S.showOpeningPalette(true); S.updateOpeningPalette();
       S.syncSelectionManagerFromLegacy('canvas');
       S.refreshMeasurements();
-      S.showHint('Door / Window selected — edit in the bar'); return true;
+      S.showHint('Opening selected — edit type, size, hinge/swing in the bar'); return true;
     }
     const wh = S.wallSegHit(p);
     if (wh) {
@@ -846,6 +1161,7 @@ export function initRooms() {
     state.sel = null; state.selOpening2D = null;
     state._panelSelectedObjectId = null;
     S.showSelectBar(null);
+    if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms();
     S.syncSceneObjectsToEngine();
     S.refreshMeasurements(); S.syncWallsToMasses(); S.recordVec(__b); S.scheduleAutosave();
     S.renderLayers();

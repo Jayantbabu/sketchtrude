@@ -107,11 +107,31 @@ export function initState() {
       if (opts.name && existing.name !== opts.name) {
         S.layerEngine.renameObject(existing.id, opts.name);
       }
-      if (opts.parentObjectId != null) {
+      if (opts.parentObjectId !== undefined) {
         const curParent = existing.relations && existing.relations.hierarchyParentId;
-        // Don't yank elements out of a user group (Room 1, etc.).
-        if (!curParent && opts.parentObjectId) {
-          // reparent into wall group on first sync only — skip if already grouped by user
+        const nextParent = opts.parentObjectId || null;
+        if (curParent !== nextParent && typeof S.layerEngine.reparentObject === 'function') {
+          S.layerEngine.reparentObject(existing.id, nextParent);
+        } else if (curParent !== nextParent) {
+          // Manual reparent when engine helper missing
+          try {
+            if (curParent && S.layerEngine.objects[curParent]) {
+              const kids = S.layerEngine.objects[curParent].childIds || [];
+              S.layerEngine.objects[curParent].childIds = kids.filter((id: string) => id !== existing.id);
+            } else {
+              const layer = S.layerEngine.layers[existing.layerId];
+              if (layer) layer.objectIds = (layer.objectIds || []).filter((id: string) => id !== existing.id);
+            }
+            existing.relations.hierarchyParentId = nextParent;
+            if (nextParent && S.layerEngine.objects[nextParent]) {
+              const kids = S.layerEngine.objects[nextParent].childIds || [];
+              if (!kids.includes(existing.id)) kids.push(existing.id);
+              S.layerEngine.objects[nextParent].childIds = kids;
+            } else {
+              const layer = S.layerEngine.layers[existing.layerId];
+              if (layer && !(layer.objectIds || []).includes(existing.id)) layer.objectIds.push(existing.id);
+            }
+          } catch (_) { /* ignore */ }
         }
       }
       if (opts.geometry) existing.geometry = opts.geometry;
@@ -121,7 +141,7 @@ export function initState() {
     return S.layerEngine.createObject(opts);
   };
 
-  /** Open polyline → one WALL. Closed loop → ROOM with one WALL child per segment. */
+  /** Independent wall → WALL object. If wall.roomId set, nest under that room. */
   S.registerWallInLayerPanel = function registerWallInLayerPanel(wall: any) {
     if (!S.layerEngine || !wall) return;
     const mainId = S.ensureMainObjectLayer();
@@ -130,49 +150,64 @@ export function initState() {
     const wallIndex = (state.walls || []).indexOf(wall);
     const wallNum = wallIndex >= 0 ? wallIndex + 1 : (state.walls || []).length;
     const pts = wall.pts || [];
-    const segCount = Math.max(0, pts.length - 1);
-    if (segCount <= 0) return;
-    const closed = S.isWallClosedLoop(wall);
+    if (pts.length < 2) return;
 
-    if (!closed) {
-      // Single wall entry for any open polyline (1+ segments) — no Face children.
-      if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
-        wall.name = 'Wall ' + wallNum;
-      }
-      S.upsertEngineObject({
-        type: 'wall',
-        name: wall.name,
-        layerId: mainId,
-        legacyRef: { kind: 'wall', id: wall.id },
-        geometry: { pts, thickMM: wall.thickMM, heightM: wall.heightM },
-      });
-    } else {
-      if (!wall.name || /^Wall\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
-        wall.name = 'Room ' + wallNum;
-      }
-      const parentId = S.upsertEngineObject({
-        type: 'room',
-        name: wall.name,
-        layerId: mainId,
-        legacyRef: { kind: 'wall', id: wall.id },
-      });
-      for (let seg = 0; seg < segCount; seg++) {
-        S.upsertEngineObject({
-          type: 'wall',
-          name: 'Wall ' + (seg + 1),
+    if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+      wall.name = 'Wall ' + wallNum;
+    }
+
+    // null (not undefined) so a wall that leaves a room is moved back to the layer root
+    let parentObjectId: string | null = null;
+    if (wall.roomId && state.wallRooms) {
+      const room = (state.wallRooms || []).find((r: any) => r && r.id === wall.roomId);
+      if (room) {
+        const roomOid = S.upsertEngineObject({
+          type: 'room',
+          name: room.name || 'Room',
           layerId: mainId,
-          parentObjectId: parentId || undefined,
-          legacyRef: { kind: 'wall-face', wallId: wall.id, seg },
-          geometry: {
-            a: { x: pts[seg].x, y: pts[seg].y },
-            b: { x: pts[seg + 1].x, y: pts[seg + 1].y },
-            thickMM: wall.thickMM,
-            heightM: wall.heightM,
-          },
+          legacyRef: { kind: 'wall-room', id: room.id },
         });
+        parentObjectId = roomOid || null;
       }
     }
+
+    S.upsertEngineObject({
+      type: 'wall',
+      name: wall.name,
+      layerId: mainId,
+      parentObjectId,
+      legacyRef: { kind: 'wall', id: wall.id },
+      geometry: { pts, thickMM: wall.thickMM, heightM: wall.heightM, bulge: wall.bulge || 0 },
+    });
     if (S.layerEngine.layers[mainId]) S.layerEngine.layers[mainId].expanded = true;
+    S.renderLayers();
+  };
+
+  /** Nest all walls under detected Keyplan rooms in the layer panel. */
+  S.syncWallRoomsToLayerPanel = function syncWallRoomsToLayerPanel() {
+    if (!S.layerEngine) return;
+    const mainId = S.ensureMainObjectLayer();
+    if (!mainId) return;
+    (state.walls || []).forEach((wall: any) => {
+      if (wall) S.registerWallInLayerPanel(wall);
+    });
+    // Drop rooms that no longer exist, orphaned walls, and pre-segment wall faces
+    const roomIds = new Set((state.wallRooms || []).map((r: any) => r.id));
+    const wallIds = new Set((state.walls || []).map((w: any) => w && w.id).filter(Boolean));
+    const stale: string[] = [];
+    Object.values(S.layerEngine.objects || {}).forEach((obj: any) => {
+      const ref = obj && obj.legacyRef;
+      if (!ref) return;
+      if (ref.kind === 'wall-room' && ref.id && !roomIds.has(ref.id)) stale.push(obj.id);
+      else if (ref.kind === 'wall' && ref.id && !wallIds.has(ref.id)) stale.push(obj.id);
+      else if (ref.kind === 'wall-face') stale.push(obj.id);
+    });
+    if (stale.length) {
+      try { S.layerEngine.deleteObjects(stale); } catch (_) { /* ignore */ }
+    }
+    if (typeof S.layerEngine.normalizeObjectContainment === 'function') {
+      S.layerEngine.normalizeObjectContainment();
+    }
     S.renderLayers();
   };
   S.registerShapeInLayerPanel = function registerShapeInLayerPanel(shape: any) {
@@ -197,55 +232,46 @@ export function initState() {
     if (!mainId) return;
     const wanted = new Set();
 
+    // Detect rooms without re-entering layer sync (avoid recursion)
+    if (typeof S.reconcileWallRooms === 'function') {
+      S.reconcileWallRooms({ skipLayerSync: true });
+    }
+
+    (state.wallRooms || []).forEach((room: any) => {
+      if (!room || !room.id) return;
+      const oid = S.upsertEngineObject({
+        type: 'room',
+        name: room.name || 'Room',
+        layerId: mainId,
+        legacyRef: { kind: 'wall-room', id: room.id },
+      });
+      if (oid) wanted.add(oid);
+    });
+
     (state.walls || []).forEach((wall: any, wallIndex: any) => {
       S.ensureWallId(wall);
       const pts = wall.pts || [];
-      const segCount = Math.max(0, pts.length - 1);
-      if (segCount <= 0) return;
-      const closed = S.isWallClosedLoop(wall);
+      if (pts.length < 2) return;
       const wallNum = wallIndex + 1;
-
-      if (!closed) {
-        if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
-          wall.name = 'Wall ' + wallNum;
-        }
-        const oid = S.upsertEngineObject({
-          type: 'wall',
-          name: wall.name,
-          layerId: mainId,
-          legacyRef: { kind: 'wall', id: wall.id },
-          geometry: { pts, thickMM: wall.thickMM, heightM: wall.heightM },
-        });
-        if (oid) wanted.add(oid);
-        return;
+      if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+        wall.name = 'Wall ' + wallNum;
       }
-
-      if (!wall.name || /^Wall\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
-        wall.name = 'Room ' + wallNum;
+      let parentObjectId: string | null = null;
+      if (wall.roomId) {
+        const roomObj = S.findEngineObjectByLegacy
+          ? S.findEngineObjectByLegacy((r: any) => r.kind === 'wall-room' && r.id === wall.roomId)
+          : null;
+        if (roomObj) parentObjectId = roomObj.id;
       }
-      const parentId = S.upsertEngineObject({
-        type: 'room',
+      const oid = S.upsertEngineObject({
+        type: 'wall',
         name: wall.name,
         layerId: mainId,
+        parentObjectId,
         legacyRef: { kind: 'wall', id: wall.id },
+        geometry: { pts, thickMM: wall.thickMM, heightM: wall.heightM, bulge: wall.bulge || 0 },
       });
-      if (parentId) wanted.add(parentId);
-      for (let seg = 0; seg < segCount; seg++) {
-        const oid = S.upsertEngineObject({
-          type: 'wall',
-          name: 'Wall ' + (seg + 1),
-          layerId: mainId,
-          parentObjectId: parentId || undefined,
-          legacyRef: { kind: 'wall-face', wallId: wall.id, seg },
-          geometry: {
-            a: pts[seg] && { x: pts[seg].x, y: pts[seg].y },
-            b: pts[seg + 1] && { x: pts[seg + 1].x, y: pts[seg + 1].y },
-            thickMM: wall.thickMM,
-            heightM: wall.heightM,
-          },
-        });
-        if (oid) wanted.add(oid);
-      }
+      if (oid) wanted.add(oid);
     });
 
     (state.shapes || []).forEach((sh: any) => {
@@ -284,6 +310,9 @@ export function initState() {
       if (o.legacyRef) toDel.push(id);
     });
     if (toDel.length) S.layerEngine.deleteObjects(toDel);
+    if (typeof S.layerEngine.normalizeObjectContainment === 'function') {
+      S.layerEngine.normalizeObjectContainment();
+    }
   }
   /** Sync legacy state.sel with SelectionManager (selection-only — never dirty). */
   S.syncSelectionManagerFromLegacy = function syncSelectionManagerFromLegacy(source: any) {

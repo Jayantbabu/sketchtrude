@@ -614,6 +614,94 @@ export class LayerEngine {
     return this.objects;
   }
 
+  /**
+   * Move an object under a new hierarchy parent (or back to the layer root).
+   * Detaches from wherever it currently lives so it never appears in two places.
+   */
+  reparentObject(objectId: string, parentObjectId: string | null): boolean {
+    const obj = this.objects[objectId];
+    if (!obj) return false;
+    const nextParentId = parentObjectId ?? null;
+    if ((obj.relations.hierarchyParentId ?? null) === nextParentId) return false;
+    if (nextParentId) {
+      if (!this.objects[nextParentId]) return false;
+      // Refuse cycles: the new parent must not sit inside this object.
+      let walk: string | null | undefined = nextParentId;
+      while (walk) {
+        if (walk === objectId) return false;
+        walk = this.objects[walk]?.relations.hierarchyParentId ?? null;
+      }
+    }
+
+    const prevParentId = obj.relations.hierarchyParentId ?? null;
+    this.detachObjectFromHierarchy(obj);
+    if (prevParentId) {
+      obj.relations.groupIds = (obj.relations.groupIds ?? []).filter(
+        (id) => id !== prevParentId,
+      );
+    }
+
+    obj.relations.hierarchyParentId = nextParentId;
+    if (nextParentId) {
+      const parent = this.objects[nextParentId]!;
+      if (!parent.childIds.includes(objectId)) parent.childIds.push(objectId);
+      if (parent.type === "group" || parent.type === "room") {
+        obj.relations.groupIds = [...(obj.relations.groupIds ?? []), nextParentId];
+      }
+    } else {
+      const layer = this.layers[obj.layerId];
+      if (layer && !layer.objectIds.includes(objectId)) {
+        layer.objectIds.push(objectId);
+        obj.order = layer.objectIds.length - 1;
+      }
+    }
+
+    obj.updatedAt = nowIso();
+    this.emit({ type: "object-reparented", objectId });
+    this.bump("object-reparented");
+    return true;
+  }
+
+  /**
+   * Repair containment so every object is listed exactly once: parented objects
+   * live only in their parent's childIds, orphans fall back to the layer root.
+   */
+  normalizeObjectContainment(): void {
+    for (const obj of Object.values(this.objects)) {
+      const seen = new Set<string>();
+      obj.childIds = obj.childIds.filter((id) => {
+        const child = this.objects[id];
+        if (!child || seen.has(id)) return false;
+        seen.add(id);
+        return (
+          child.relations.hierarchyParentId === obj.id ||
+          child.relations.hostObjectId === obj.id
+        );
+      });
+    }
+    for (const layer of Object.values(this.layers)) {
+      const seen = new Set<string>();
+      layer.objectIds = layer.objectIds.filter((id) => {
+        const obj = this.objects[id];
+        if (!obj || seen.has(id)) return false;
+        seen.add(id);
+        const parentId = obj.relations.hierarchyParentId;
+        return !parentId || !this.objects[parentId];
+      });
+    }
+    for (const obj of Object.values(this.objects)) {
+      const parentId = obj.relations.hierarchyParentId;
+      const parent = parentId ? this.objects[parentId] : null;
+      if (parent) {
+        if (!parent.childIds.includes(obj.id)) parent.childIds.push(obj.id);
+        continue;
+      }
+      if (parentId && !parent) obj.relations.hierarchyParentId = null;
+      const layer = this.layers[obj.layerId];
+      if (layer && !layer.objectIds.includes(obj.id)) layer.objectIds.push(obj.id);
+    }
+  }
+
   renameObject(objectId: string, name: string): void {
     const obj = this.objects[objectId];
     if (!obj || obj.locked) return;

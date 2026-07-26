@@ -211,6 +211,7 @@ export function initPersistence() {
         scaleLabel: S.scaleLabelFromState(),
         measurements: S.cloneForSave(state.measurements || [], []),
         walls: S.wallsForSave(),
+        wallRooms: S.cloneForSave(state.wallRooms || [], []),
         wallsVisible: state.wallsVisible !== false,
         shapes: S.shapesForSave(),
         masses: S.massesForSave(),
@@ -320,6 +321,7 @@ export function initPersistence() {
         scaleLabel: payload.scaleLabel,
         measurements: payload.measurements,
         walls: payload.walls,
+        wallRooms: payload.wallRooms || [],
         wallsVisible: payload.wallsVisible,
         shapes: payload.shapes,
         masses: payload.masses,
@@ -581,7 +583,10 @@ export function initPersistence() {
     if (Array.isArray(saved.walls)) {
       state.walls = saved.walls;
       state.walls.forEach(S.ensureWallId);
+      if (typeof S.migrateWallsToSegments === 'function') S.migrateWallsToSegments();
+      if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms();
     }
+    if (Array.isArray(saved.wallRooms)) state.wallRooms = saved.wallRooms;
     state.wallsVisible = saved.wallsVisible != null ? !!saved.wallsVisible : true;
     if (Array.isArray(saved.shapes)) {
       state.shapes = saved.shapes;

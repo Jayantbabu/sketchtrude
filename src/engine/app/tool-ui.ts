@@ -73,16 +73,24 @@ export function initToolUi() {
       S.showHint('Area tool — click to place vertices · Double-click near start to close · Esc to cancel');
     } else if (tool === 'wall') {
       if (state.wallsVisible === false) S.setWallsVisible(true);
-      S.startPolyTool();
-      S.showHint('Wall — tap a centreline · double-tap to finish · tap the first point to close a room · snapping on');
+      state.wallChainEnd = null;
+      state.wallDrag = null;
+      state.polyActive = false;
+      state.polyPoints = [];
+      const ph = $el('poly-hint');
+      if (ph) ph.style.display = 'none';
+      S.showHint('Wall — drag to draw · snaps to angles & ends · Esc ends chain · select wall to curve via bulge handle');
     } else if (tool === 'opening') {
       if (state.polyActive) { state.polyPoints = []; state.polyActive = false; $el('poly-hint').style.display = 'none'; }
-      S.showHint('Door / Window — tap a wall to place · drag to slide · flip & resize in the bar');
+      if (state.wallDrag) S.cancelWallDrag();
+      S.showHint('Door / Window / Opening — tap a wall to place · drag to slide · edit in the bar');
     } else if (tool === 'select') {
       if (state.polyActive) { state.polyPoints = []; state.polyActive = false; $el('poly-hint').style.display = 'none'; }
+      if (state.wallDrag) S.cancelWallDrag();
       S.showHint('Select — tap a wall, door, window, or room to edit it · Delete to remove');
     } else if (tool === 'offset') {
       if (state.polyActive) { state.polyPoints = []; state.polyActive = false; $el('poly-hint').style.display = 'none'; }
+      if (state.wallDrag) S.cancelWallDrag();
       S.showHint('Offset — tap a room, then set the distance and tap Apply');
     } else if (tool === 'line') {
       S.startPolyTool();
@@ -93,6 +101,7 @@ export function initToolUi() {
       $el('poly-hint').style.display = 'none';
       S.refreshMeasurements();
     }
+    if (tool !== 'wall' && state.wallChainEnd) state.wallChainEnd = null;
     // Top floating palettes are replaced by the bottom tool options bar.
     if (typeof S.showWall2dPalette === 'function') S.showWall2dPalette(false);
     if (typeof S.showOpeningPalette === 'function') S.showOpeningPalette(false);
@@ -925,9 +934,12 @@ export function initToolUi() {
     return out;
   }
 
-  // allow clicking the puck name to open the library
+  // Brush library only for draw/pen tools — never steal Opening/Build title taps
   $el('puck-name').addEventListener('click', (e: any) => {
     e.stopPropagation();
+    const group = S._groupOf ? S._groupOf(state.tool) : null;
+    const isDraw = (group && group.id === 'draw') || (typeof S.isDrawTool === 'function' && S.isDrawTool(state.tool));
+    if (!isDraw) return;
     if (S.brushLibrary.classList.contains('show')) S.closeBrushLibrary();
     else S.openBrushLibrary();
   });
@@ -1158,16 +1170,125 @@ export function initToolUi() {
     const sel: any = state.sel;
     ctx.innerHTML = '';
 
+    const setOpeningKind = (kind: string) => {
+      state.openingKind = kind;
+      const o = typeof S.selectedOpening2D === 'function' ? S.selectedOpening2D() : null;
+      if (o) {
+        const __b = S.vectorSnapshot();
+        o.kind = kind;
+        if (kind === 'door') { o.sillMM = 0; if (o.hand == null) o.hand = 1; if (o.swing == null) o.swing = 1; }
+        if (kind === 'opening') { o.sillMM = 0; }
+        S.refreshMeasurements(); S.syncWallsToMasses(); S.recordVec(__b, true);
+      }
+      if (tool !== 'opening' && !(sel && sel.type === 'opening')) S.setTool('opening');
+      else S.syncToolOptionsBar();
+    };
+
+    const appendOpeningDims = (activeKind: string, o: any) => {
+      const dims = o
+        ? { wMM: o.wMM, hMM: o.hMM, sillMM: o.sillMM || 0 }
+        : (typeof S.openingDims === 'function' ? S.openingDims(activeKind) : { wMM: 900, hMM: 2100, sillMM: 0 });
+      ctx.appendChild(label('W'));
+      ctx.appendChild(numField('puck-op-w', dims.wMM, 100, 4000, 10, (v) => {
+        const cur = typeof S.selectedOpening2D === 'function' ? S.selectedOpening2D() : null;
+        const __b = cur ? S.vectorSnapshot() : null;
+        if (cur) cur.wMM = v;
+        else if (state.openingKind === 'door') state.doorWMM = v;
+        else if (state.openingKind === 'window') state.winWMM = v;
+        else state.openWMM = v;
+        S.refreshMeasurements(); S.syncWallsToMasses();
+        if (__b) S.recordVec(__b, true);
+      }));
+      ctx.appendChild(label('H'));
+      ctx.appendChild(numField('puck-op-h', dims.hMM, 100, 4000, 10, (v) => {
+        const cur = typeof S.selectedOpening2D === 'function' ? S.selectedOpening2D() : null;
+        const __b = cur ? S.vectorSnapshot() : null;
+        if (cur) cur.hMM = v;
+        else if (state.openingKind === 'door') state.doorHMM = v;
+        else if (state.openingKind === 'window') state.winHMM = v;
+        else state.openHMM = v;
+        S.syncWallsToMasses();
+        if (__b) S.recordVec(__b, true);
+      }));
+      if (activeKind === 'window') {
+        ctx.appendChild(label('SILL'));
+        ctx.appendChild(numField('puck-op-sill', dims.sillMM || 0, 0, 3000, 10, (v) => {
+          const cur = typeof S.selectedOpening2D === 'function' ? S.selectedOpening2D() : null;
+          const __b = cur ? S.vectorSnapshot() : null;
+          if (cur) cur.sillMM = v; else state.winSillMM = v;
+          S.syncWallsToMasses();
+          if (__b) S.recordVec(__b, true);
+        }));
+      }
+      if (activeKind === 'door' && o) {
+        ctx.appendChild(chip('Hinge', false, () => {
+          const cur = S.selectedOpening2D(); if (!cur) return;
+          const __b = S.vectorSnapshot(); cur.hand = -(cur.hand || 1);
+          S.refreshMeasurements(); S.recordVec(__b, true); S.syncToolOptionsBar();
+        }));
+        ctx.appendChild(chip('Swing', false, () => {
+          const cur = S.selectedOpening2D(); if (!cur) return;
+          const __b = S.vectorSnapshot(); cur.swing = -(cur.swing || 1);
+          S.refreshMeasurements(); S.recordVec(__b, true); S.syncToolOptionsBar();
+        }));
+      }
+      if (o) {
+        ctx.appendChild(chip('Delete', false, () => {
+          if (state.selOpening2D) S.deleteOpening2D(state.selOpening2D);
+          state.sel = null;
+          S.syncToolOptionsBar();
+        }));
+      }
+    };
+
+    // Selected opening — never fall through to pen SIZE/OPACITY
+    if (sel && sel.type === 'opening') {
+      drawCtrls.style.display = 'none';
+      ctx.style.display = 'flex';
+      if (nameEl) nameEl.textContent = 'OPENING';
+      const o = typeof S.selectedOpening2D === 'function' ? S.selectedOpening2D() : null;
+      const kind = (o && o.kind) || state.openingKind || 'door';
+      ctx.appendChild(chip('Door', kind === 'door', () => setOpeningKind('door')));
+      ctx.appendChild(chip('Window', kind === 'window', () => setOpeningKind('window')));
+      ctx.appendChild(chip('Opening', kind === 'opening', () => setOpeningKind('opening')));
+      appendOpeningDims(kind, o);
+      return;
+    }
+
     // Selection transforms take priority in the bottom bar
     if (sel && (sel.type === 'shape' || sel.type === 'wall')) {
       drawCtrls.style.display = 'none';
       ctx.style.display = 'flex';
       if (nameEl) nameEl.textContent = sel.type === 'shape' ? 'SHAPE' : 'WALL';
-      ctx.appendChild(chip('Move', false, () => S.beginVecXform('move')));
-      ctx.appendChild(chip('Scale', false, () => S.beginVecXform('scale')));
-      ctx.appendChild(chip('Rotate', false, () => S.beginVecXform('rotate')));
+      const transformMode = state.vecXform && state.vecXform.mode;
+      ctx.appendChild(chip('Move', transformMode === 'move', () => S.beginVecXform('move')));
+      ctx.appendChild(chip('Scale', transformMode === 'scale', () => S.beginVecXform('scale')));
+      ctx.appendChild(chip('Rotate', transformMode === 'rotate', () => S.beginVecXform('rotate')));
       ctx.appendChild(chip('Delete', false, () => S.deleteSelectedElement()));
-      if (sel.type === 'shape' && state.shapes[sel.idx]) {
+      if (sel.type === 'wall') {
+        let wi = typeof sel.wi === 'number' ? sel.wi : -1;
+        if (wi < 0 && sel.id) wi = (state.walls || []).findIndex((w: any) => w && w.id === sel.id);
+        const wall = wi >= 0 ? state.walls[wi] : null;
+        if (wall) {
+          ctx.appendChild(label('THICK'));
+          ctx.appendChild(numField('puck-selected-wall-thick', wall.thickMM || 230, 50, 600, 10, (v) => {
+            const __b = S.vectorSnapshot();
+            wall.thickMM = v;
+            S.refreshMeasurements();
+            S.syncWallsToMasses();
+            S.recordVec(__b, true);
+            S.scheduleAutosave();
+          }));
+          ctx.appendChild(label('HEIGHT'));
+          ctx.appendChild(numField('puck-selected-wall-height', wall.heightM || 3, 0.5, 20, 0.1, (v) => {
+            const __b = S.vectorSnapshot();
+            wall.heightM = v;
+            S.syncWallsToMasses();
+            S.recordVec(__b, true);
+            S.scheduleAutosave();
+          }));
+        }
+      } else if (state.shapes[sel.idx]) {
         const sh = state.shapes[sel.idx];
         ctx.appendChild(label('LINE'));
         ctx.appendChild(numField('puck-shape-w', sh.width || 2, 0.5, 40, 0.5, (v) => {
@@ -1215,21 +1336,16 @@ export function initToolUi() {
       ctx.style.display = 'flex';
       if (nameEl) nameEl.textContent = tool === 'opening' ? 'OPENING' : 'WALL';
       ctx.appendChild(chip('Wall', tool === 'wall', () => S.setTool('wall')));
-      ctx.appendChild(chip('Door', tool === 'opening' && state.openingKind === 'door', () => {
-        state.openingKind = 'door';
-        if (tool !== 'opening') S.setTool('opening');
-        else S.syncToolOptionsBar();
-      }));
-      ctx.appendChild(chip('Window', tool === 'opening' && state.openingKind === 'window', () => {
-        state.openingKind = 'window';
-        if (tool !== 'opening') S.setTool('opening');
-        else S.syncToolOptionsBar();
-      }));
+      ctx.appendChild(chip('Door', tool === 'opening' && state.openingKind === 'door', () => setOpeningKind('door')));
+      ctx.appendChild(chip('Window', tool === 'opening' && state.openingKind === 'window', () => setOpeningKind('window')));
+      ctx.appendChild(chip('Opening', tool === 'opening' && state.openingKind === 'opening', () => setOpeningKind('opening')));
       if (tool === 'wall') {
         ctx.appendChild(label('THICK'));
         ctx.appendChild(numField('puck-wall-thick', state.wallThickMM || 230, 50, 600, 10, (v) => { state.wallThickMM = v; }));
         ctx.appendChild(label('H'));
         ctx.appendChild(numField('puck-wall-h', state.wallHeightM || 3, 0.5, 20, 0.1, (v) => { state.wallHeightM = v; }));
+      } else if (tool === 'opening') {
+        appendOpeningDims(state.openingKind || 'door', null);
       }
       return;
     }
