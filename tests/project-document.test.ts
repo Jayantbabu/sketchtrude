@@ -47,6 +47,7 @@ describe("legacy roundtrip", () => {
       masses: [],
       layers: [
         {
+          layer_id: "stable-ink-layer",
           name: "Ink",
           visible: true,
           opacity: 0.8,
@@ -66,11 +67,13 @@ describe("legacy roundtrip", () => {
     expect(doc.canvas.background.value).toBe("#fff8e1");
     expect(doc.settings.grid.show).toBe(true);
     expect(doc.settings.scaleLabel).toBe("1:100");
-    expect(doc.scene.layers["layer-0"]?.rasterPath).toBe(
+    expect(doc.scene.rootLayerIds).toEqual(["stable-ink-layer"]);
+    expect(doc.scene.layers["stable-ink-layer"]?.rasterPath).toBe(
       "user/proj/layers/0.png",
     );
 
     const stored = doc.extensions?.legacyStudio as LegacyStudioDocument;
+    expect(stored.layers[0]?.layer_id).toBe("stable-ink-layer");
     expect(stored.layers[0]?.raster_path).toBe("user/proj/layers/0.png");
     // Live exports may still carry blobs until prepareDocument strips them.
     expect(stored.measurements).toEqual([{ id: 1 }]);

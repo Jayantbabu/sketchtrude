@@ -48,7 +48,11 @@ export class AutosaveManager {
     if (this.localTimer) clearTimeout(this.localTimer);
     this.localTimer = setTimeout(() => {
       this.localTimer = null;
-      void this.onLocalSave(reason);
+      // Scheduled saves report failure through controller status/logging. Keep a
+      // recoverable autosave error from becoming an unhandled browser rejection.
+      void Promise.resolve()
+        .then(() => this.onLocalSave(reason))
+        .catch(() => undefined);
     }, this.localDebounceMs);
   }
 

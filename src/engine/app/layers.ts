@@ -255,6 +255,7 @@ export function initLayers() {
         pageHeight: baseViewport.height,
         transform: { ...layer.imageTransform },
         opacity: layer.imageOpacity,
+        rasterMode: 'drawing-only',
       };
       layer.pdfBlob = pdfBlob;
       layer.pdfDocument = pdf;

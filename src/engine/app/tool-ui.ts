@@ -14,6 +14,11 @@ export function initToolUi() {
   /* =================== TOOL UI =================== */
   S.setTool = function setTool(tool: any) {
     if (typeof S.hideShapeChip === 'function') S.hideShapeChip();
+    // The old Brushes pseudo-tool now routes to the compact draw menu.
+    if (tool === 'brushes') {
+      if (typeof S.openDrawToolMenu === 'function') S.openDrawToolMenu();
+      return;
+    }
     // Leaving 3D massing if another tool is chosen
     if (S.massing.active && tool !== 'massing') {
       S.massing.active = false;
@@ -32,14 +37,6 @@ export function initToolUi() {
     // close popovers
     S.colorPopover.classList.remove('show');
     S.stencilPopover.classList.remove('show');
-
-    if (tool === 'brushes') {
-      // intercept: open library, don't change tool
-      $all('.tool').forEach((t: any) => t.classList.remove('active'));
-      $el('rail-brushes')?.classList.add('active');
-      S.openBrushLibrary();
-      return;
-    }
 
     { const bb = S.BUILTIN_BRUSHES.find((x: any) => x.id === tool); if (bb) S.setActiveBrush(bb); }
 
@@ -160,7 +157,7 @@ export function initToolUi() {
       const isDoubleTap = (S._lastToolTap.tool === tool && now - S._lastToolTap.time < 400);
       S._lastToolTap = { tool, time: now };
 
-      if (tool === 'brushes') { S.setTool('brushes'); return; }
+      if (tool === 'brushes') { S.openDrawToolMenu?.(); return; }
 
       if (S.BRUSH_FAMILIES[tool]) {
         const fam = tool;
@@ -168,7 +165,7 @@ export function initToolUi() {
         state.brushLast = state.brushLast || {};
         const last = state.brushLast[fam] || fam;
         S.setTool(last);
-        if (wasFamActive || isDoubleTap) S.openBrushFlyout(fam, btn);
+        if (wasFamActive || isDoubleTap) S.openDrawToolMenu?.();
         return;
       }
 
@@ -182,7 +179,7 @@ export function initToolUi() {
 
   // ===== Grouped rail: collapse the 20-tool strip into category buttons =====
   S.TOOL_GROUPS = [
-    { id: 'draw',     label: 'Draw',           tools: ['pen','marker','pencil','brush','watercolour','eraser','brushes'] },
+    { id: 'draw',     label: 'Draw',           tools: ['pen','marker','pencil','brush','watercolour','eraser'] },
     { id: 'shapes',   label: 'Shapes',         tools: ['line','rect','circle'] },
     { id: 'fillstamp',label: 'Fill / Stamp',   tools: ['fill','stencil'] },
     { id: 'region',   label: 'Region',         tools: ['wand','lasso'] },
@@ -191,7 +188,7 @@ export function initToolUi() {
   ];
   S._railMeta = {};
   S._groupOf = function _groupOf(toolId: any) { return S.TOOL_GROUPS.find((g: any) => g.tools.includes(toolId)); }
-  S.activateRailTool = function activateRailTool(t: any) { if (t === 'brushes') S.openBrushLibrary(); else S.setTool(t); }
+  S.activateRailTool = function activateRailTool(t: any) { S.setTool(t); }
 
   S.regroupRail = function regroupRail() {
     const rail = $qs('.rail');
@@ -280,18 +277,46 @@ export function initToolUi() {
       if (t === state.tool) it.classList.add('on');
       it.addEventListener('click', (e: any) => {
         e.stopPropagation();
-        if (t === 'brushes') { S.openBrushLibrary(); }
-        else { state.groupLast[g.id] = t; S.setTool(t); S.updateGroupIcon(g); }
+        state.groupLast[g.id] = t;
+        S.setTool(t);
+        S.updateGroupIcon(g);
         S.closeGroupFlyout();
       });
       fly.appendChild(it);
     });
+    if (g.id === 'draw') {
+      const divider = document.createElement('div');
+      divider.style.cssText = 'height:1px;background:rgba(255,255,255,0.1);margin:3px 5px;';
+      fly.appendChild(divider);
+
+      const importPen = document.createElement('button');
+      importPen.className = 'gfi';
+      importPen.title = 'PNG/JPG tips; limited ABR, Procreate and SketchBook extraction';
+      importPen.innerHTML =
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        + '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14a2 2 0 0 0 2-2v-4M3 15v4a2 2 0 0 0 2 2"/>'
+        + '</svg><span>Import Pen…</span>';
+      importPen.addEventListener('click', (e: any) => {
+        e.stopPropagation();
+        S.closeGroupFlyout();
+        $el('brush-import-file')?.click();
+      });
+      fly.appendChild(importPen);
+    }
     document.body.appendChild(fly);
     const r = btn.getBoundingClientRect();
     fly.style.left = (r.right + 8) + 'px';
     fly.style.top = Math.max(8, Math.min(r.top, window.innerHeight - fly.offsetHeight - 8)) + 'px';
     S._grpFlyout = fly;
     setTimeout(() => document.addEventListener('click', S.closeGroupFlyout, { once: true }), 0);
+  }
+
+  S.openDrawToolMenu = function openDrawToolMenu() {
+    const drawGroup = S.TOOL_GROUPS.find((g: any) => g.id === 'draw');
+    const drawButton = $qs('.rail .tool[data-group="draw"]');
+    if (!drawGroup || !drawButton) return;
+    if (typeof S.closeBrushLibrary === 'function') S.closeBrushLibrary();
+    S.openGroupFlyout(drawGroup, drawButton);
   }
 
   S.highlightRailGroups = function highlightRailGroups() {
@@ -349,7 +374,7 @@ export function initToolUi() {
   // Open the settings panel appropriate to each tool
   S.openToolSettings = function openToolSettings(tool: any) {
     if (S.isDrawTool(tool)) {
-      S.openBrushLibrary();
+      S.openDrawToolMenu();
     } else if (tool === 'stencil') {
       S.showStencilPopover();   // setTool already opens it; re-tap re-opens if closed
     } else if (tool === 'fill' || tool === 'wand' || tool === 'lasso') {
@@ -670,6 +695,7 @@ export function initToolUi() {
   $el('brush-import-file').addEventListener('change', async (e: any) => {
     const files = Array.from(e.target.files);
     e.target.value = '';
+    const firstImportedIndex = state.customBrushes.length;
     let imported = 0;
     for (const file of files as any[]) {
       const lower = file.name.toLowerCase();
@@ -690,6 +716,8 @@ export function initToolUi() {
     }
     S.persistBrushes();
     S.renderBrushList();
+    const firstImported = state.customBrushes[firstImportedIndex];
+    if (imported > 0 && firstImported) S.setActiveBrush(firstImported);
     S.showHint(imported ? `Imported ${imported} brush${imported>1?'es':''}` : 'No brushes could be read from that file');
   });
 
@@ -934,14 +962,14 @@ export function initToolUi() {
     return out;
   }
 
-  // Brush library only for draw/pen tools — never steal Opening/Build title taps
+  // Reuse the compact rail menu for draw tools; never steal Opening/Build title taps.
   $el('puck-name').addEventListener('click', (e: any) => {
     e.stopPropagation();
     const group = S._groupOf ? S._groupOf(state.tool) : null;
     const isDraw = (group && group.id === 'draw') || (typeof S.isDrawTool === 'function' && S.isDrawTool(state.tool));
     if (!isDraw) return;
-    if (S.brushLibrary.classList.contains('show')) S.closeBrushLibrary();
-    else S.openBrushLibrary();
+    if (S._grpFlyout) S.closeGroupFlyout();
+    else S.openDrawToolMenu();
   });
 
   /* =================== BRUSH EDITOR =================== */

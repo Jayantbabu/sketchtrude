@@ -64,17 +64,29 @@ function isLegacyManifest(
 function studioToSavedLayers(
   manifest: StudioDocument & { layer_count?: number },
   existing: StudioDocument | null,
-  uploadedPaths: Map<number, string>,
+  uploadedPaths: Map<string | number, string>,
 ): StudioDocument["layers"] {
   const layerCount = manifest.layer_count ?? manifest.layers?.length ?? 0;
   const savedLayers: StudioDocument["layers"] = [];
 
   for (let i = 0; i < layerCount; i++) {
     const meta = manifest.layers?.[i];
+    const layerId =
+      typeof meta?.layer_id === "string" && meta.layer_id
+        ? meta.layer_id
+        : null;
+    const existingHasStableIds = Boolean(
+      existing?.layers?.some((layer) => layer.layer_id),
+    );
+    const existingLayer = layerId
+      ? existing?.layers?.find((layer) => layer.layer_id === layerId)
+      : !existingHasStableIds
+        ? existing?.layers?.[i]
+        : undefined;
     const raster_path =
-      uploadedPaths.get(i) ??
+      (layerId ? uploadedPaths.get(layerId) : uploadedPaths.get(i)) ??
       meta?.raster_path ??
-      existing?.layers?.[i]?.raster_path ??
+      existingLayer?.raster_path ??
       null;
 
     if (!raster_path) {
@@ -82,13 +94,14 @@ function studioToSavedLayers(
     }
 
     savedLayers.push({
+      layer_id: layerId ?? existingLayer?.layer_id ?? `legacy-layer-${i}`,
       name: meta?.name || `Layer ${i + 1}`,
       visible: meta?.visible !== false,
       opacity: meta?.opacity ?? 1,
       trace: meta?.trace ?? 0,
       blendMode: meta?.blendMode || "source-over",
       raster_path,
-      pdf: meta?.pdf ?? existing?.layers?.[i]?.pdf ?? null,
+      pdf: meta?.pdf ?? existingLayer?.pdf ?? null,
     });
   }
 
@@ -355,11 +368,21 @@ export async function PUT(request: Request, context: RouteContext) {
   }
 
   const existingStudioDocument = readStudioDocument(existingMeta);
-  const uploadedPaths = new Map<number, string>();
+  const uploadedPaths = new Map<string | number, string>();
+  const uploadLegacy =
+    parsed.mode === "project-document" && parsed.document
+      ? legacyStudioFromProjectDocument(parsed.document)
+      : parsed.legacyManifest;
 
   // Upload any multipart layer files first
   for (const [index, file] of parsed.files.entries()) {
-    const raster_path = layerRasterPath(user.id, projectId, index);
+    const layerId = uploadLegacy?.layers?.[index]?.layer_id ?? index;
+    const raster_path = layerRasterPath(
+      user.id,
+      projectId,
+      layerId,
+      parsed.clientMutationId || crypto.randomUUID(),
+    );
     const buffer = Buffer.from(await file.arrayBuffer());
     const uploaded = await uploadToStorage(
       "layer-rasters",
@@ -370,7 +393,7 @@ export async function PUT(request: Request, context: RouteContext) {
     if (!uploaded) {
       return NextResponse.json({ error: "Layer upload failed" }, { status: 500 });
     }
-    uploadedPaths.set(index, raster_path);
+    uploadedPaths.set(layerId, raster_path);
   }
 
   let studio_document: StudioDocument;

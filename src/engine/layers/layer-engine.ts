@@ -29,6 +29,7 @@ import {
 export type LayerEngineListener = (event: LayerEngineEvent) => void;
 
 export type CreateLayerOptions = {
+  id?: string;
   name?: string;
   layerKind?: LayerKind;
   floorId?: string;
@@ -204,6 +205,7 @@ export class LayerEngine {
    */
   rebuildFromLegacyLayers(
     legacyLayers: Array<{
+      layer_id?: string;
       name?: string;
       visible?: boolean;
       locked?: boolean;
@@ -237,6 +239,7 @@ export class LayerEngine {
     for (let i = 0; i < list.length; i++) {
       const ld = list[i] ?? {};
       const id = this.createLayer({
+        id: ld.layer_id,
         name: ld.name || `Layer ${i + 1}`,
         layerKind: "sketch",
         floorId,
@@ -333,7 +336,11 @@ export class LayerEngine {
       ? this.layers[parentLayerId]!.childLayerIds
       : this.floors[floorId]!.layerIds;
 
-    const id = createLayerId();
+    const requestedId = options.id?.trim();
+    if (requestedId && this.layers[requestedId]) {
+      throw new Error(`LayerEngine.createLayer: duplicate layer id ${requestedId}`);
+    }
+    const id = requestedId || createLayerId();
     const index = siblings.length + 1;
     const layer: LayerNode = {
       id,

@@ -530,9 +530,33 @@ export function initRooms() {
       const dx = b0.x - a0.x, dy = b0.y - a0.y, L = Math.hypot(dx, dy) || 1;
       const nx = -dy / L, ny = dx / L;
       const label = S.formatLen(totalLen);
-      const lx = mid.x + nx * (h + 14), ly = mid.y + ny * (h + 14);
+      const labelOffset = h + 18;
+      let labelSide = 1;
+
+      // Wall endpoint order is arbitrary, so the default normal can point into
+      // the room. Flip it outward to keep dimensions clear of room details.
+      const room = w.roomId
+        ? (state.wallRooms || []).find((candidate: any) => candidate && candidate.id === w.roomId)
+        : null;
+      const roomPoly = room && typeof S.cyclePolygon === 'function'
+        ? S.cyclePolygon(room.wallIds || [])
+        : null;
+      if (roomPoly && roomPoly.length >= 3 && typeof S.pointInPoly === 'function') {
+        // Probe just off the centreline; a larger probe could cross all the way
+        // through the exact tiny rooms this placement is meant to handle.
+        const probeDistance = Math.min(2, Math.max(0.5, h * 0.25));
+        const probeX = mid.x + nx * probeDistance;
+        const probeY = mid.y + ny * probeDistance;
+        if (S.pointInPoly(probeX, probeY, roomPoly)) labelSide = -1;
+      }
+
+      const lx = mid.x + nx * labelOffset * labelSide;
+      const ly = mid.y + ny * labelOffset * labelSide;
+      let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+      if (angle > 90) angle -= 180;
+      else if (angle < -90) angle += 180;
       S._wallLengthLabels = S._wallLengthLabels || [];
-      S._wallLengthLabels.push({ x: lx, y: ly, text: label });
+      S._wallLengthLabels.push({ x: lx, y: ly, text: label, angle });
     }
 
     // Thickness label on free walls (both ends) when selected — skip for clutter
@@ -544,6 +568,10 @@ export function initRooms() {
       const t = document.createElementNS(svgns, 'text');
       t.setAttribute('x', String(label.x)); t.setAttribute('y', String(label.y));
       t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('dominant-baseline', 'middle');
+      if (Number.isFinite(label.angle)) {
+        t.setAttribute('transform', `rotate(${label.angle} ${label.x} ${label.y})`);
+      }
       t.setAttribute('fill', '#555');
       t.setAttribute('stroke', 'rgba(255,255,255,0.96)');
       t.setAttribute('stroke-width', '5');
@@ -599,6 +627,10 @@ export function initRooms() {
       t1.setAttribute('x', String(cx)); t1.setAttribute('y', String(cy - 8));
       t1.setAttribute('text-anchor', 'middle');
       t1.setAttribute('fill', '#222');
+      t1.setAttribute('stroke', 'rgba(255,255,255,0.96)');
+      t1.setAttribute('stroke-width', '4');
+      t1.setAttribute('stroke-linejoin', 'round');
+      t1.setAttribute('paint-order', 'stroke');
       t1.setAttribute('font-size', '15');
       t1.setAttribute('font-weight', '700');
       t1.setAttribute('font-family', 'ui-sans-serif,system-ui');
@@ -608,6 +640,10 @@ export function initRooms() {
       t2.setAttribute('x', String(cx)); t2.setAttribute('y', String(cy + 12));
       t2.setAttribute('text-anchor', 'middle');
       t2.setAttribute('fill', '#666');
+      t2.setAttribute('stroke', 'rgba(255,255,255,0.96)');
+      t2.setAttribute('stroke-width', '4');
+      t2.setAttribute('stroke-linejoin', 'round');
+      t2.setAttribute('paint-order', 'stroke');
       t2.setAttribute('font-size', '13');
       t2.setAttribute('font-family', 'JetBrains Mono,monospace');
       t2.textContent = areaLabel;

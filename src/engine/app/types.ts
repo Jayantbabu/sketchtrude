@@ -193,6 +193,7 @@ export type EngineLayer = {
     pageHeight: number;
     transform: { x: number; y: number; w: number; h: number; rotation: number };
     opacity: number;
+    rasterMode?: 'drawing-only';
   } | null;
   pdfBlob?: Blob | null;
   pdfUrl?: string | null;

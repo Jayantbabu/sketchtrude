@@ -62,7 +62,7 @@ export type ProjectSaveControllerOptions = {
   /** Used only when export still contains layer blobs/data-URLs. Prefer raster_path. */
   uploadLayerRaster?: (
     projectId: string,
-    layerIndex: number,
+    layerId: string,
     blob: Blob,
   ) => Promise<string>;
 };
@@ -131,6 +131,11 @@ export async function prepareDocumentForPersistence(
   const layers: LegacyStudioLayerMeta[] = [];
   for (let i = 0; i < legacy.layers.length; i += 1) {
     const layer = { ...legacy.layers[i] };
+    const layerId =
+      (typeof layer.layer_id === "string" && layer.layer_id.trim()) ||
+      document.scene.rootLayerIds[i] ||
+      `legacy-layer-${i}`;
+    layer.layer_id = layerId;
     const hasPath =
       typeof layer.raster_path === "string" && layer.raster_path.length > 0;
 
@@ -148,7 +153,7 @@ export async function prepareDocumentForPersistence(
     }
 
     if (uploadLayerRaster && blob && blob.size > 0) {
-      layer.raster_path = await uploadLayerRaster(projectId, i, blob);
+      layer.raster_path = await uploadLayerRaster(projectId, layerId, blob);
     } else if (!hasPath && blob && blob.size > 0) {
       // Offline / no uploader: keep blob for local recovery only.
     }
@@ -166,7 +171,8 @@ export async function prepareDocumentForPersistence(
 
   // Mirror raster paths onto scene layers when present.
   for (let i = 0; i < layers.length; i += 1) {
-    const id = cleaned.scene.rootLayerIds[i] ?? `layer-${i}`;
+    const id = layers[i]?.layer_id;
+    if (!id) continue;
     const sceneLayer = cleaned.scene.layers[id];
     if (sceneLayer && layers[i]?.raster_path !== undefined) {
       cleaned.scene.layers[id] = {
@@ -181,12 +187,12 @@ export async function prepareDocumentForPersistence(
 
 async function defaultUploadLayerRaster(
   projectId: string,
-  layerIndex: number,
+  layerId: string,
   blob: Blob,
 ): Promise<string> {
   const form = new FormData();
-  form.set("layer_index", String(layerIndex));
-  form.set("raster", blob, `layer-${layerIndex}.png`);
+  form.set("layer_id", layerId);
+  form.set("raster", blob, "layer.png");
 
   const res = await fetch(
     `/api/projects/${encodeURIComponent(projectId)}/document/layer`,
@@ -596,7 +602,6 @@ export class ProjectSaveControllerImpl implements ProjectSaveController {
       const document = await prepareDocumentForPersistence(
         projectId,
         this.withUpdatedMetadata(exported),
-        this.uploadLayerRaster,
       );
 
       const updatedAt = nowIso();
@@ -668,11 +673,21 @@ export class ProjectSaveControllerImpl implements ProjectSaveController {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Local save failed";
-      projectPersistenceLogger.error("project_document_validation_failed", {
+      const logFields = {
         projectId,
         errorCode: error instanceof Error ? error.name : "unknown",
         reason,
-      });
+      };
+      if (error instanceof InvalidProjectDocumentError) {
+        projectPersistenceLogger.error(
+          "project_document_validation_failed",
+          logFields,
+        );
+      } else {
+        // Local recovery must not be reported as schema corruption. Network
+        // uploads happen in performCloudSave; export/IDB failures are recoverable.
+        projectPersistenceLogger.warn("project_local_save_failed", logFields);
+      }
       this.lastOutcome = {
         ok: false,
         local: false,

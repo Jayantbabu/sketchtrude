@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { prepareDocumentForPersistence } from "@/features/projects/application/project-save-controller";
-import { createEmptyProjectDocument } from "@/features/projects/domain/project-document";
+import {
+  createEmptyProjectDocument,
+  projectDocumentFromLegacyStudio,
+} from "@/features/projects/domain/project-document";
 import type { LegacyStudioDocument } from "@/features/projects/domain/project-document";
 
 describe("prepareDocumentForPersistence", () => {
@@ -20,8 +23,8 @@ describe("prepareDocumentForPersistence", () => {
       },
     ];
 
-    const upload = vi.fn(async (_pid: string, index: number) => {
-      return `user/proj/layers/${index}-new.png`;
+    const upload = vi.fn(async (_pid: string, layerId: string) => {
+      return `user/proj/layers/${layerId}-new.png`;
     });
 
     const prepared = await prepareDocumentForPersistence(
@@ -32,7 +35,9 @@ describe("prepareDocumentForPersistence", () => {
     const out = prepared.extensions!.legacyStudio as LegacyStudioDocument;
 
     expect(upload).toHaveBeenCalledTimes(1);
-    expect(out.layers[0]?.raster_path).toBe("user/proj/layers/0-new.png");
+    expect(out.layers[0]?.raster_path).toBe(
+      "user/proj/layers/layer-0-new.png",
+    );
     expect(out.layers[0]?.blob).toBeUndefined();
   });
 
@@ -79,6 +84,7 @@ describe("prepareDocumentForPersistence", () => {
         pageHeight: 792,
         transform: { x: 500, y: 400, w: 900, h: 1164, rotation: 0 },
         opacity: 0.8,
+        rasterMode: "drawing-only",
       },
     }];
 
@@ -88,5 +94,51 @@ describe("prepareDocumentForPersistence", () => {
     expect(layer?.pdfBlob).toBeUndefined();
     expect((layer?.pdf as { storagePath?: string })?.storagePath)
       .toBe("user/proj/pdf/source.pdf");
+    expect((layer?.pdf as { rasterMode?: string })?.rasterMode)
+      .toBe("drawing-only");
+  });
+
+  it("keeps uploaded rasters attached to stable layer ids after reordering", async () => {
+    const sketchBlob = new Blob(["sketch"], { type: "image/png" });
+    const pdfBlob = new Blob(["pdf"], { type: "image/png" });
+    const doc = projectDocumentFromLegacyStudio("proj-reorder", {
+      version: 1,
+      savedAt: Date.now(),
+      doc: { wmm: 420, hmm: 297, dpi: 150 },
+      layers: [
+        {
+          layer_id: "sketch-layer",
+          name: "Sketch",
+          visible: true,
+          opacity: 1,
+          blob: sketchBlob,
+        },
+        {
+          layer_id: "pdf-layer",
+          name: "PDF",
+          visible: true,
+          opacity: 1,
+          blob: pdfBlob,
+        },
+      ],
+    });
+    doc.scene.rootLayerIds = ["pdf-layer", "sketch-layer"];
+    const upload = vi.fn(async (_projectId: string, layerId: string) =>
+      `user/proj/layers/${layerId}.png`);
+
+    const prepared = await prepareDocumentForPersistence(
+      "proj-reorder",
+      doc,
+      upload,
+    );
+
+    expect(upload.mock.calls.map((call) => call[1])).toEqual([
+      "sketch-layer",
+      "pdf-layer",
+    ]);
+    expect(prepared.scene.layers["sketch-layer"]?.rasterPath)
+      .toBe("user/proj/layers/sketch-layer.png");
+    expect(prepared.scene.layers["pdf-layer"]?.rasterPath)
+      .toBe("user/proj/layers/pdf-layer.png");
   });
 });

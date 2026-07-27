@@ -1277,6 +1277,7 @@
       for (let i = 0; i < list.length; i++) {
         const ld = (_a2 = list[i]) != null ? _a2 : {};
         const id = this.createLayer({
+          id: ld.layer_id,
           name: ld.name || `Layer ${i + 1}`,
           layerKind: "sketch",
           floorId,
@@ -1347,7 +1348,7 @@
     }
     /* ───────── layers ───────── */
     createLayer(options = {}) {
-      var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
+      var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j;
       const layerKind = (_a2 = options.layerKind) != null ? _a2 : "sketch";
       const caps = getLayerCapabilities(layerKind);
       const floorId = (_c = (_b = options.floorId) != null ? _b : this.activeFloorId) != null ? _c : this.rootFloorIds[0];
@@ -1359,20 +1360,24 @@
         throw new Error("LayerEngine.createLayer: parent layer not found");
       }
       const siblings = parentLayerId ? this.layers[parentLayerId].childLayerIds : this.floors[floorId].layerIds;
-      const id = createLayerId();
+      const requestedId = (_e = options.id) == null ? void 0 : _e.trim();
+      if (requestedId && this.layers[requestedId]) {
+        throw new Error(`LayerEngine.createLayer: duplicate layer id ${requestedId}`);
+      }
+      const id = requestedId || createLayerId();
       const index = siblings.length + 1;
       const layer = {
         id,
         kind: "layer",
         layerKind,
-        name: (_e = options.name) != null ? _e : defaultLayerName(layerKind, index),
+        name: (_f = options.name) != null ? _f : defaultLayerName(layerKind, index),
         floorId,
         parentLayerId,
-        visible: (_f = options.visible) != null ? _f : true,
-        locked: (_g = options.locked) != null ? _g : caps.lockByDefault,
-        opacity: (_h = options.opacity) != null ? _h : 1,
+        visible: (_g = options.visible) != null ? _g : true,
+        locked: (_h = options.locked) != null ? _h : caps.lockByDefault,
+        opacity: (_i = options.opacity) != null ? _i : 1,
         order: 0,
-        blendMode: (_i = options.blendMode) != null ? _i : "source-over",
+        blendMode: (_j = options.blendMode) != null ? _j : "source-over",
         expanded: layerKind === "architecture" || layerKind === "object",
         trace: layerKind === "sketch" ? 0 : void 0,
         rasterPath: null,
@@ -33175,7 +33180,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           pageWidth: baseViewport.width,
           pageHeight: baseViewport.height,
           transform: { ...layer.imageTransform },
-          opacity: layer.imageOpacity
+          opacity: layer.imageOpacity,
+          rasterMode: "drawing-only"
         };
         layer.pdfBlob = pdfBlob;
         layer.pdfDocument = pdf;
@@ -36505,8 +36511,11 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     const $all = (sel) => document.querySelectorAll(sel);
     const $qs = (sel) => document.querySelector(sel);
     S.setTool = function setTool(tool) {
-      var _a3;
       if (typeof S.hideShapeChip === "function") S.hideShapeChip();
+      if (tool === "brushes") {
+        if (typeof S.openDrawToolMenu === "function") S.openDrawToolMenu();
+        return;
+      }
       if (S.massing.active && tool !== "massing") {
         S.massing.active = false;
         S.massingCanvas.style.display = "none";
@@ -36522,12 +36531,6 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       $all(".tool").forEach((t) => t.classList.toggle("active", t.dataset.tool === S.brushFamilyOf(tool)));
       S.colorPopover.classList.remove("show");
       S.stencilPopover.classList.remove("show");
-      if (tool === "brushes") {
-        $all(".tool").forEach((t) => t.classList.remove("active"));
-        (_a3 = $el("rail-brushes")) == null ? void 0 : _a3.classList.add("active");
-        S.openBrushLibrary();
-        return;
-      }
       {
         const bb = S.BUILTIN_BRUSHES.find((x) => x.id === tool);
         if (bb) S.setActiveBrush(bb);
@@ -36651,6 +36654,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     S._lastToolTap = { tool: null, time: 0 };
     $all(".tool").forEach((btn) => {
       btn.addEventListener("click", (e) => {
+        var _a3, _b, _c, _d;
         e.stopPropagation();
         const tool = btn.dataset.tool;
         const now = Date.now();
@@ -36658,7 +36662,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const isDoubleTap = S._lastToolTap.tool === tool && now - S._lastToolTap.time < 400;
         S._lastToolTap = { tool, time: now };
         if (tool === "brushes") {
-          S.setTool("brushes");
+          (_b = (_a3 = S).openDrawToolMenu) == null ? void 0 : _b.call(_a3);
           return;
         }
         if (S.BRUSH_FAMILIES[tool]) {
@@ -36667,7 +36671,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           state2.brushLast = state2.brushLast || {};
           const last = state2.brushLast[fam] || fam;
           S.setTool(last);
-          if (wasFamActive || isDoubleTap) S.openBrushFlyout(fam, btn);
+          if (wasFamActive || isDoubleTap) (_d = (_c = S).openDrawToolMenu) == null ? void 0 : _d.call(_c);
           return;
         }
         S.setTool(tool);
@@ -36677,7 +36681,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       });
     });
     S.TOOL_GROUPS = [
-      { id: "draw", label: "Draw", tools: ["pen", "marker", "pencil", "brush", "watercolour", "eraser", "brushes"] },
+      { id: "draw", label: "Draw", tools: ["pen", "marker", "pencil", "brush", "watercolour", "eraser"] },
       { id: "shapes", label: "Shapes", tools: ["line", "rect", "circle"] },
       { id: "fillstamp", label: "Fill / Stamp", tools: ["fill", "stencil"] },
       { id: "region", label: "Region", tools: ["wand", "lasso"] },
@@ -36689,8 +36693,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return S.TOOL_GROUPS.find((g) => g.tools.includes(toolId));
     };
     S.activateRailTool = function activateRailTool(t) {
-      if (t === "brushes") S.openBrushLibrary();
-      else S.setTool(t);
+      S.setTool(t);
     };
     S.regroupRail = function regroupRail() {
       const rail = $qs(".rail");
@@ -36810,23 +36813,42 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         if (t === state2.tool) it.classList.add("on");
         it.addEventListener("click", (e) => {
           e.stopPropagation();
-          if (t === "brushes") {
-            S.openBrushLibrary();
-          } else {
-            state2.groupLast[g.id] = t;
-            S.setTool(t);
-            S.updateGroupIcon(g);
-          }
+          state2.groupLast[g.id] = t;
+          S.setTool(t);
+          S.updateGroupIcon(g);
           S.closeGroupFlyout();
         });
         fly.appendChild(it);
       });
+      if (g.id === "draw") {
+        const divider = document.createElement("div");
+        divider.style.cssText = "height:1px;background:rgba(255,255,255,0.1);margin:3px 5px;";
+        fly.appendChild(divider);
+        const importPen = document.createElement("button");
+        importPen.className = "gfi";
+        importPen.title = "PNG/JPG tips; limited ABR, Procreate and SketchBook extraction";
+        importPen.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14a2 2 0 0 0 2-2v-4M3 15v4a2 2 0 0 0 2 2"/></svg><span>Import Pen\u2026</span>';
+        importPen.addEventListener("click", (e) => {
+          var _a3;
+          e.stopPropagation();
+          S.closeGroupFlyout();
+          (_a3 = $el("brush-import-file")) == null ? void 0 : _a3.click();
+        });
+        fly.appendChild(importPen);
+      }
       document.body.appendChild(fly);
       const r = btn.getBoundingClientRect();
       fly.style.left = r.right + 8 + "px";
       fly.style.top = Math.max(8, Math.min(r.top, window.innerHeight - fly.offsetHeight - 8)) + "px";
       S._grpFlyout = fly;
       setTimeout(() => document.addEventListener("click", S.closeGroupFlyout, { once: true }), 0);
+    };
+    S.openDrawToolMenu = function openDrawToolMenu() {
+      const drawGroup = S.TOOL_GROUPS.find((g) => g.id === "draw");
+      const drawButton = $qs('.rail .tool[data-group="draw"]');
+      if (!drawGroup || !drawButton) return;
+      if (typeof S.closeBrushLibrary === "function") S.closeBrushLibrary();
+      S.openGroupFlyout(drawGroup, drawButton);
     };
     S.highlightRailGroups = function highlightRailGroups() {
       const rail = $qs(".rail");
@@ -36897,7 +36919,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     };
     S.openToolSettings = function openToolSettings(tool) {
       if (S.isDrawTool(tool)) {
-        S.openBrushLibrary();
+        S.openDrawToolMenu();
       } else if (tool === "stencil") {
         S.showStencilPopover();
       } else if (tool === "fill" || tool === "wand" || tool === "lasso") {
@@ -37177,6 +37199,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     $el("brush-import-file").addEventListener("change", async (e) => {
       const files = Array.from(e.target.files);
       e.target.value = "";
+      const firstImportedIndex = state2.customBrushes.length;
       let imported = 0;
       for (const file of files) {
         const lower = file.name.toLowerCase();
@@ -37196,6 +37219,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       S.persistBrushes();
       S.renderBrushList();
+      const firstImported = state2.customBrushes[firstImportedIndex];
+      if (imported > 0 && firstImported) S.setActiveBrush(firstImported);
       S.showHint(imported ? `Imported ${imported} brush${imported > 1 ? "es" : ""}` : "No brushes could be read from that file");
     });
     S.fileToDataURL = function fileToDataURL(file) {
@@ -37442,8 +37467,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       const group = S._groupOf ? S._groupOf(state2.tool) : null;
       const isDraw = group && group.id === "draw" || typeof S.isDrawTool === "function" && S.isDrawTool(state2.tool);
       if (!isDraw) return;
-      if (S.brushLibrary.classList.contains("show")) S.closeBrushLibrary();
-      else S.openBrushLibrary();
+      if (S._grpFlyout) S.closeGroupFlyout();
+      else S.openDrawToolMenu();
     });
     S.editorBrush = null;
     S.editorEditIndex = null;
@@ -40011,9 +40036,23 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const dx = b0.x - a0.x, dy = b0.y - a0.y, L = Math.hypot(dx, dy) || 1;
         const nx = -dy / L, ny = dx / L;
         const label = S.formatLen(totalLen);
-        const lx = mid.x + nx * (h + 14), ly = mid.y + ny * (h + 14);
+        const labelOffset = h + 18;
+        let labelSide = 1;
+        const room = w.roomId ? (state2.wallRooms || []).find((candidate) => candidate && candidate.id === w.roomId) : null;
+        const roomPoly = room && typeof S.cyclePolygon === "function" ? S.cyclePolygon(room.wallIds || []) : null;
+        if (roomPoly && roomPoly.length >= 3 && typeof S.pointInPoly === "function") {
+          const probeDistance = Math.min(2, Math.max(0.5, h * 0.25));
+          const probeX = mid.x + nx * probeDistance;
+          const probeY = mid.y + ny * probeDistance;
+          if (S.pointInPoly(probeX, probeY, roomPoly)) labelSide = -1;
+        }
+        const lx = mid.x + nx * labelOffset * labelSide;
+        const ly = mid.y + ny * labelOffset * labelSide;
+        let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+        if (angle > 90) angle -= 180;
+        else if (angle < -90) angle += 180;
         S._wallLengthLabels = S._wallLengthLabels || [];
-        S._wallLengthLabels.push({ x: lx, y: ly, text: label });
+        S._wallLengthLabels.push({ x: lx, y: ly, text: label, angle });
       }
     };
     S.renderWallLengthLabels = function renderWallLengthLabels() {
@@ -40023,6 +40062,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         t.setAttribute("x", String(label.x));
         t.setAttribute("y", String(label.y));
         t.setAttribute("text-anchor", "middle");
+        t.setAttribute("dominant-baseline", "middle");
+        if (Number.isFinite(label.angle)) {
+          t.setAttribute("transform", `rotate(${label.angle} ${label.x} ${label.y})`);
+        }
         t.setAttribute("fill", "#555");
         t.setAttribute("stroke", "rgba(255,255,255,0.96)");
         t.setAttribute("stroke-width", "5");
@@ -40079,6 +40122,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         t1.setAttribute("y", String(cy - 8));
         t1.setAttribute("text-anchor", "middle");
         t1.setAttribute("fill", "#222");
+        t1.setAttribute("stroke", "rgba(255,255,255,0.96)");
+        t1.setAttribute("stroke-width", "4");
+        t1.setAttribute("stroke-linejoin", "round");
+        t1.setAttribute("paint-order", "stroke");
         t1.setAttribute("font-size", "15");
         t1.setAttribute("font-weight", "700");
         t1.setAttribute("font-family", "ui-sans-serif,system-ui");
@@ -40089,6 +40136,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         t2.setAttribute("y", String(cy + 12));
         t2.setAttribute("text-anchor", "middle");
         t2.setAttribute("fill", "#666");
+        t2.setAttribute("stroke", "rgba(255,255,255,0.96)");
+        t2.setAttribute("stroke-width", "4");
+        t2.setAttribute("stroke-linejoin", "round");
+        t2.setAttribute("paint-order", "stroke");
         t2.setAttribute("font-size", "13");
         t2.setAttribute("font-family", "JetBrains Mono,monospace");
         t2.textContent = areaLabel;
@@ -45322,6 +45373,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     const $all = (sel) => document.querySelectorAll(sel);
     const $qs = (sel) => document.querySelector(sel);
     window.addEventListener("keydown", (e) => {
+      var _a2, _b;
       if (e.target.tagName === "INPUT" || e.target.isContentEditable) return;
       if (e.key === "Escape" && typeof S.hideShapeChip === "function") S.hideShapeChip();
       if (e.key === "Escape" && state2.vecXform) {
@@ -45362,7 +45414,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       else if (e.key === "a") S.setTool("area");
       else if (e.key === "s") S.setTool("stencil");
       else if (e.key === "h") S.setTool("hand");
-      else if (e.key === "i") S.setTool("brushes");
+      else if (e.key === "i") (_b = (_a2 = S).openDrawToolMenu) == null ? void 0 : _b.call(_a2);
       else if (e.key === "k") S.setTool("wall");
       else if (e.key === "j") S.setTool("opening");
       else if (e.key === "x") S.setTool("wand");
@@ -45856,6 +45908,78 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   }
 
   // src/engine/app/persistence.ts
+  function shouldPaintPersistedLayerRaster(hasPdf, pdfRestored, rasterMode) {
+    return !hasPdf || !pdfRestored || rasterMode === "drawing-only";
+  }
+  async function blobFingerprint(blob) {
+    var _a2;
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    if ((_a2 = globalThis.crypto) == null ? void 0 : _a2.subtle) {
+      const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+      return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+    }
+    let hash = 2166136261;
+    for (const value of bytes) {
+      hash ^= value;
+      hash = Math.imul(hash, 16777619);
+    }
+    return `${bytes.length}:${hash >>> 0}`;
+  }
+  async function findDuplicateLegacyPdfRasterIndexes(layers, blobs) {
+    var _a2, _b, _c;
+    const legacyPdfIndexes = layers.map((layer, index) => ({ layer, index })).filter(({ layer, index }) => {
+      var _a3;
+      return Boolean(layer.pdf) && ((_a3 = layer.pdf) == null ? void 0 : _a3.rasterMode) !== "drawing-only" && Boolean(blobs[index]);
+    });
+    if (!legacyPdfIndexes.length) return /* @__PURE__ */ new Set();
+    const duplicateIndexes = /* @__PURE__ */ new Set();
+    const pdfFingerprints = /* @__PURE__ */ new Map();
+    for (const { index } of legacyPdfIndexes) {
+      pdfFingerprints.set(index, await blobFingerprint(blobs[index]));
+    }
+    for (let index = 0; index < layers.length; index++) {
+      if (((_a2 = layers[index]) == null ? void 0 : _a2.pdf) || !blobs[index]) continue;
+      for (const pdfEntry of legacyPdfIndexes) {
+        const samePath = Boolean((_b = layers[index]) == null ? void 0 : _b.raster_path) && ((_c = layers[index]) == null ? void 0 : _c.raster_path) === pdfEntry.layer.raster_path;
+        const sameBytes = blobs[index].size === blobs[pdfEntry.index].size && await blobFingerprint(blobs[index]) === pdfFingerprints.get(pdfEntry.index);
+        if (samePath || sameBytes) {
+          duplicateIndexes.add(index);
+          break;
+        }
+      }
+    }
+    return duplicateIndexes;
+  }
+  function pdfRasterContentSimilarity(candidate, reference) {
+    const length = Math.min(candidate.length, reference.length);
+    let contentPixels = 0;
+    let matchingPixels = 0;
+    for (let offset = 0; offset + 3 < length; offset += 4) {
+      const refAlpha = reference[offset + 3];
+      const refLuma = reference[offset] * 0.299 + reference[offset + 1] * 0.587 + reference[offset + 2] * 0.114;
+      if (refAlpha < 64 || refLuma > 242) continue;
+      contentPixels += 1;
+      if (candidate[offset + 3] < 64) continue;
+      const difference = Math.abs(candidate[offset] - reference[offset]) + Math.abs(candidate[offset + 1] - reference[offset + 1]) + Math.abs(candidate[offset + 2] - reference[offset + 2]);
+      if (difference <= 90) matchingPixels += 1;
+    }
+    return contentPixels >= 100 ? matchingPixels / contentPixels : 0;
+  }
+  function clearMatchingPdfPixels(candidate, reference) {
+    const length = Math.min(candidate.length, reference.length);
+    let cleared = 0;
+    for (let offset = 0; offset + 3 < length; offset += 4) {
+      if (reference[offset + 3] < 64 || candidate[offset + 3] < 64) continue;
+      const difference = Math.abs(candidate[offset] - reference[offset]) + Math.abs(candidate[offset + 1] - reference[offset + 1]) + Math.abs(candidate[offset + 2] - reference[offset + 2]);
+      if (difference > 90) continue;
+      candidate[offset] = 0;
+      candidate[offset + 1] = 0;
+      candidate[offset + 2] = 0;
+      candidate[offset + 3] = 0;
+      cleared += 1;
+    }
+    return cleared;
+  }
   function initPersistence() {
     const state2 = S.state;
     const $el = (id) => document.getElementById(id);
@@ -46000,7 +46124,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return S.cloneForSave(state2.walls || [], []);
     };
     S.saveDoc = async function saveDoc() {
-      var _a2, _b;
+      var _a2;
       if (S._autosaveBusy) return S.waitForAutosave();
       if (S._autosaveSuspended || !state2.layers.length) return;
       if (state2.drawing) {
@@ -46024,21 +46148,12 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           }
           if (l._dirty || !l._savedBlob) {
             let sourceCanvas = l.canvas;
-            if (l.imageCanvas && !l.imageBaked || l.pdf && l.pdfCanvas) {
+            if (l.imageCanvas && !l.imageBaked && !l.pdf) {
               const tmp = document.createElement("canvas");
               tmp.width = S.doc.wPx;
               tmp.height = S.doc.hPx;
               const tc = tmp.getContext("2d");
-              if (l.imageCanvas && !l.pdf) tc.drawImage(l.imageCanvas, 0, 0);
-              if (l.pdf && l.pdfCanvas && l.imageTransform) {
-                const t = l.imageTransform;
-                tc.save();
-                tc.globalAlpha = (_a2 = l.imageOpacity) != null ? _a2 : 1;
-                tc.translate(t.x, t.y);
-                tc.rotate((t.rotation || 0) * Math.PI / 180);
-                tc.drawImage(l.pdfCanvas, -t.w / 2, -t.h / 2, t.w, t.h);
-                tc.restore();
-              }
+              tc.drawImage(l.imageCanvas, 0, 0);
               tc.drawImage(l.canvas, 0, 0);
               sourceCanvas = tmp;
             }
@@ -46048,6 +46163,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             await Promise.resolve();
           }
           layerData.push({
+            layer_id: l.engineId,
             name: l.name,
             visible: l.visible,
             opacity: l.opacity,
@@ -46055,7 +46171,12 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             blendMode: l.blendMode,
             blob: l._savedBlob,
             raster_path: l._rasterPath || null,
-            pdf: l.pdf ? { ...l.pdf, transform: { ...l.imageTransform }, opacity: (_b = l.imageOpacity) != null ? _b : 1 } : null,
+            pdf: l.pdf ? {
+              ...l.pdf,
+              transform: { ...l.imageTransform },
+              opacity: (_a2 = l.imageOpacity) != null ? _a2 : 1,
+              rasterMode: "drawing-only"
+            } : null,
             pdfBlob: l.pdfBlob || null
           });
         }
@@ -46321,7 +46442,14 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const layers = saved.layers.map((layer, i) => {
           if (layer.blob && layer.blob.size > 0) return layer;
           if (layer.raster_url || layer.rasterUrl) return layer;
-          const fromLocal = local.layers[i];
+          const sameLayerType = (candidate) => Boolean(candidate == null ? void 0 : candidate.pdf) === Boolean(layer == null ? void 0 : layer.pdf);
+          const layerId = typeof layer.layer_id === "string" ? layer.layer_id : null;
+          const identifiedLocal = layerId ? local.layers.find((candidate) => (candidate == null ? void 0 : candidate.layer_id) === layerId) : null;
+          const namedCandidates = local.layers.filter((candidate) => sameLayerType(candidate) && (candidate == null ? void 0 : candidate.name) === (layer == null ? void 0 : layer.name));
+          const namedLocal = namedCandidates.length === 1 ? namedCandidates[0] : null;
+          const indexedLocal = local.layers[i];
+          const localHasStableIds = local.layers.some((candidate) => candidate == null ? void 0 : candidate.layer_id);
+          const fromLocal = identifiedLocal || (!layerId ? namedLocal || (!localHasStableIds && sameLayerType(indexedLocal) ? indexedLocal : null) : null);
           if ((fromLocal == null ? void 0 : fromLocal.blob) && fromLocal.blob.size > 0) {
             return { ...layer, blob: fromLocal.blob };
           }
@@ -46347,8 +46475,96 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         return saved;
       }
     };
+    S.repairCrossLayerPdfCopies = function repairCrossLayerPdfCopies() {
+      var _a2;
+      const pdfLayers = (state2.layers || []).filter((layer) => (layer == null ? void 0 : layer.pdf) && layer.pdfCanvas && layer.imageTransform);
+      const rasterLayers = (state2.layers || []).filter((layer) => layer && !layer.pdf && layer.canvas);
+      if (!pdfLayers.length || !rasterLayers.length) return false;
+      const thumbScale = Math.min(1, 320 / Math.max(S.doc.wPx, S.doc.hPx));
+      const thumbWidth = Math.max(1, Math.round(S.doc.wPx * thumbScale));
+      const thumbHeight = Math.max(1, Math.round(S.doc.hPx * thumbScale));
+      let repaired = false;
+      for (const pdfLayer of pdfLayers) {
+        const transform = pdfLayer.imageTransform;
+        const pdfCanvas = pdfLayer.pdfCanvas;
+        if (!transform || !pdfCanvas) continue;
+        const referenceThumb = document.createElement("canvas");
+        referenceThumb.width = thumbWidth;
+        referenceThumb.height = thumbHeight;
+        const referenceThumbCtx = referenceThumb.getContext("2d");
+        referenceThumbCtx.scale(thumbScale, thumbScale);
+        referenceThumbCtx.translate(transform.x, transform.y);
+        referenceThumbCtx.rotate((transform.rotation || 0) * Math.PI / 180);
+        referenceThumbCtx.drawImage(
+          pdfCanvas,
+          -transform.w / 2,
+          -transform.h / 2,
+          transform.w,
+          transform.h
+        );
+        const referenceThumbData = referenceThumbCtx.getImageData(
+          0,
+          0,
+          thumbWidth,
+          thumbHeight
+        );
+        for (const layer of rasterLayers) {
+          const candidateThumb = document.createElement("canvas");
+          candidateThumb.width = thumbWidth;
+          candidateThumb.height = thumbHeight;
+          const candidateThumbCtx = candidateThumb.getContext("2d");
+          candidateThumbCtx.drawImage(
+            layer.canvas,
+            0,
+            0,
+            S.doc.wPx,
+            S.doc.hPx,
+            0,
+            0,
+            thumbWidth,
+            thumbHeight
+          );
+          const candidateThumbData = candidateThumbCtx.getImageData(
+            0,
+            0,
+            thumbWidth,
+            thumbHeight
+          );
+          const similarity = pdfRasterContentSimilarity(
+            candidateThumbData.data,
+            referenceThumbData.data
+          );
+          if (similarity < 0.72) continue;
+          const reference = document.createElement("canvas");
+          reference.width = S.doc.wPx;
+          reference.height = S.doc.hPx;
+          const referenceCtx = reference.getContext("2d");
+          referenceCtx.translate(transform.x, transform.y);
+          referenceCtx.rotate((transform.rotation || 0) * Math.PI / 180);
+          referenceCtx.drawImage(
+            pdfCanvas,
+            -transform.w / 2,
+            -transform.h / 2,
+            transform.w,
+            transform.h
+          );
+          const candidateData = layer.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
+          const referenceData = referenceCtx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
+          if (!clearMatchingPdfPixels(candidateData.data, referenceData.data)) continue;
+          layer.ctx.putImageData(candidateData, 0, 0);
+          layer._dirty = true;
+          layer._savedBlob = null;
+          layer._rasterPath = null;
+          const meta = (_a2 = S.layerEngine) == null ? void 0 : _a2.getLayer(layer.engineId);
+          if (meta) meta.rasterPath = null;
+          S.saveSnapshot(layer);
+          repaired = true;
+        }
+      }
+      return repaired;
+    };
     S.applyLegacyDocument = async function applyLegacyDocument(saved) {
-      var _a2, _b, _c, _d, _e, _f;
+      var _a2, _b, _c, _d, _e, _f, _g, _h;
       if (!saved || typeof saved !== "object") {
         throw new Error("Document has no layers");
       }
@@ -46378,6 +46594,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       S.removeAllLayers();
       const engineIds = S.layerEngine ? S.layerEngine.rebuildFromLegacyLayers(saved.layers, (_d = saved.activeLayer) != null ? _d : 0) : [];
+      const resolvedLayerBlobs = await Promise.all(
+        saved.layers.map((layer) => S.resolveLayerBlob(layer))
+      );
+      const duplicatePdfRasterIndexes = await findDuplicateLegacyPdfRasterIndexes(saved.layers, resolvedLayerBlobs);
       for (let i = 0; i < saved.layers.length; i++) {
         const ld = saved.layers[i];
         const engineId = engineIds[i];
@@ -46407,30 +46627,47 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             meta.rasterPath = ld.raster_path || null;
           }
         }
-        const blob = await S.resolveLayerBlob(ld);
-        if (blob) {
-          try {
-            const bmp = await createImageBitmap(blob);
-            layer.ctx.drawImage(bmp, 0, 0);
-            bmp.close && bmp.close();
-            layer._savedBlob = blob;
-          } catch (_) {
-          }
-        }
+        const blob = resolvedLayerBlobs[i];
+        let pdfRestored = false;
         if (layer.pdf && (layer.pdfBlob || layer.pdfUrl) && typeof S.loadPdfRuntime === "function") {
           try {
             await S.loadPdfRuntime(layer, layer.pdfBlob || layer.pdfUrl);
+            pdfRestored = true;
           } catch (error) {
             console.warn("PDF source restore failed; using raster fallback", error);
           }
+        }
+        if (blob) {
+          try {
+            if (!duplicatePdfRasterIndexes.has(i) && shouldPaintPersistedLayerRaster(
+              Boolean(layer.pdf),
+              pdfRestored,
+              (_e = ld.pdf) == null ? void 0 : _e.rasterMode
+            )) {
+              const bmp = await createImageBitmap(blob);
+              layer.ctx.drawImage(bmp, 0, 0);
+              bmp.close && bmp.close();
+            }
+            layer._savedBlob = duplicatePdfRasterIndexes.has(i) ? null : blob;
+          } catch (_) {
+          }
+        }
+        if (duplicatePdfRasterIndexes.has(i)) {
+          layer._dirty = true;
+          layer._rasterPath = null;
+        }
+        if (pdfRestored && ((_f = ld.pdf) == null ? void 0 : _f.rasterMode) !== "drawing-only") {
+          layer._dirty = true;
+          layer._savedBlob = null;
         }
         layer.history = [];
         layer.redo = [];
         S.saveSnapshot(layer);
       }
       if (S.layerEngine) S.syncStateLayersFromEngine();
-      state2.activeLayer = Math.min((_e = saved.activeLayer) != null ? _e : state2.layers.length - 1, state2.layers.length - 1);
-      if (S.layerEngine && ((_f = state2.layers[state2.activeLayer]) == null ? void 0 : _f.engineId)) {
+      const repairedCrossLayerPdf = S.repairCrossLayerPdfCopies();
+      state2.activeLayer = Math.min((_g = saved.activeLayer) != null ? _g : state2.layers.length - 1, state2.layers.length - 1);
+      if (S.layerEngine && ((_h = state2.layers[state2.activeLayer]) == null ? void 0 : _h.engineId)) {
         S.layerEngine.setActiveLayer(state2.layers[state2.activeLayer].engineId);
       }
       if (saved.pxPerUnit) {
@@ -46481,6 +46718,9 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.updateUI();
       S.refreshMeasurements();
       S.renderSchedule();
+      if (repairedCrossLayerPdf) {
+        setTimeout(() => S.scheduleAutosave(), 0);
+      }
     };
     initHostBridge();
     S._scaleSyncTimer = null;

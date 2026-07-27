@@ -41,19 +41,42 @@ export async function POST(request: Request, context: RouteContext) {
       { status: 400 },
     );
   }
+  const layerIdRaw = formData.get("layer_id");
+  const layerId =
+    typeof layerIdRaw === "string" &&
+    /^[A-Za-z0-9_-]{1,160}$/.test(layerIdRaw)
+      ? layerIdRaw
+      : null;
   const indexRaw = formData.get("layer_index");
-  const layerIndex = Number(indexRaw);
+  const layerIndex =
+    typeof indexRaw === "string" && indexRaw.trim() !== ""
+      ? Number(indexRaw)
+      : null;
   const file = formData.get("raster");
 
-  if (!Number.isFinite(layerIndex) || layerIndex < 0) {
-    return NextResponse.json({ error: "Invalid layer_index" }, { status: 400 });
+  if (
+    !layerId &&
+    (layerIndex === null || !Number.isFinite(layerIndex) || layerIndex < 0)
+  ) {
+    return NextResponse.json(
+      { error: "Missing or invalid layer_id" },
+      { status: 400 },
+    );
   }
 
   if (!(file instanceof Blob) || file.size === 0) {
     return NextResponse.json({ error: "Missing raster" }, { status: 400 });
   }
 
-  const raster_path = layerRasterPath(user.id, projectId, layerIndex);
+  const storageLayerId = layerId ?? `legacy-${layerIndex}`;
+  // Immutable upload paths ensure a rejected/stale document save cannot
+  // overwrite raster bytes referenced by the current project revision.
+  const raster_path = layerRasterPath(
+    user.id,
+    projectId,
+    storageLayerId,
+    crypto.randomUUID(),
+  );
   const buffer = Buffer.from(await file.arrayBuffer());
   const uploaded = await uploadToStorage(
     "layer-rasters",
@@ -66,5 +89,9 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Upload failed" }, { status: 500 });
   }
 
-  return NextResponse.json({ raster_path: uploaded, layer_index: layerIndex });
+  return NextResponse.json({
+    raster_path: uploaded,
+    layer_id: layerId,
+    layer_index: layerIndex,
+  });
 }

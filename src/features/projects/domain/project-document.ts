@@ -239,6 +239,7 @@ export type ProjectDocument = {
  * round-trip without importing route helpers.
  */
 export type LegacyStudioLayerMeta = {
+  layer_id?: string;
   name: string;
   visible: boolean;
   opacity: number;
@@ -410,6 +411,7 @@ export function createEmptyProjectDocument(
     masses: [],
     layers: [
       {
+        layer_id: layerId,
         name: "Sketch 01",
         visible: true,
         opacity: 1,
@@ -487,9 +489,24 @@ export function projectDocumentFromLegacyStudio(
 
   const layers: Record<string, ProjectLayer> = {};
   const rootLayerIds: string[] = [];
+  const usedLayerIds = new Set<string>();
+  const assignedLayerIds = (legacyForScene.layers ?? []).map((layer, index) => {
+    const requested =
+      typeof layer.layer_id === "string" && layer.layer_id.trim()
+        ? layer.layer_id.trim()
+        : `layer-${index}`;
+    let id = requested;
+    let suffix = 1;
+    while (usedLayerIds.has(id)) {
+      id = `${requested}-${suffix}`;
+      suffix += 1;
+    }
+    usedLayerIds.add(id);
+    return id;
+  });
 
   (legacyForScene.layers ?? []).forEach((layer, index) => {
-    const id = `layer-${index}`;
+    const id = assignedLayerIds[index]!;
     rootLayerIds.push(id);
     layers[id] = {
       id,
@@ -542,6 +559,7 @@ export function projectDocumentFromLegacyStudio(
     ...legacy,
     layers: (legacy.layers ?? []).map((layer, index) => ({
       ...layer,
+      layer_id: assignedLayerIds[index],
       name: typeof layer.name === "string" ? layer.name : `Layer ${index + 1}`,
       visible: layer.visible !== false,
       opacity: typeof layer.opacity === "number" ? layer.opacity : 1,
@@ -550,6 +568,7 @@ export function projectDocumentFromLegacyStudio(
   if (!legacyStudio.layers.length) {
     legacyStudio.layers = [
       {
+        layer_id: rootLayerIds[0],
         name: "Layer 1",
         visible: true,
         opacity: 1,
@@ -637,6 +656,7 @@ export function legacyStudioFromProjectDocument(
     (id, index) => {
       const layer = doc.scene.layers[id];
       return {
+        layer_id: id,
         name: layer?.name ?? `Layer ${index + 1}`,
         visible: layer?.visible !== false,
         opacity: layer?.opacity ?? 1,

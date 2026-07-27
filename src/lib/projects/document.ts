@@ -10,9 +10,11 @@ export type PdfLayerDescriptor = {
   pageHeight: number;
   transform: { x: number; y: number; w: number; h: number; rotation: number };
   opacity: number;
+  rasterMode?: "drawing-only";
 };
 
 export type StudioLayerMeta = {
+  layer_id?: string;
   name: string;
   visible: boolean;
   opacity: number;
@@ -47,9 +49,18 @@ export type StudioDocument = {
 export function layerRasterPath(
   userId: string,
   projectId: string,
-  index: number,
+  layerId: string | number,
+  version?: string,
 ): string {
-  return buildStoragePath(userId, projectId, `layers/${index}.png`);
+  const safeLayerId =
+    String(layerId).replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 160) || "legacy";
+  const safeVersion = version
+    ? version.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 160)
+    : null;
+  const filename = safeVersion
+    ? `layers/${safeLayerId}/${safeVersion}.png`
+    : `layers/${safeLayerId}.png`;
+  return buildStoragePath(userId, projectId, filename);
 }
 
 export async function attachLayerRasterUrls(

@@ -112,6 +112,7 @@ export class LegacyEngineDocumentAdapter implements EngineDocumentAdapter {
         layers: document.scene.rootLayerIds.map((id, index) => {
           const layer = document.scene.layers[id];
           return {
+            layer_id: id,
             name: layer?.name ?? `Layer ${index + 1}`,
             visible: layer?.visible !== false,
             opacity: layer?.opacity ?? 1,

@@ -63,13 +63,18 @@ describe("LayerEngine", () => {
     const engine = createLayerEngine();
     const ids = engine.rebuildFromLegacyLayers(
       [
-        { name: "Ink", opacity: 0.8, raster_path: "a.png" },
-        { name: "Color", visible: false },
+        {
+          layer_id: "stable-ink-layer",
+          name: "Ink",
+          opacity: 0.8,
+          raster_path: "a.png",
+        },
+        { layer_id: "stable-color-layer", name: "Color", visible: false },
       ],
       1,
     );
 
-    expect(ids).toHaveLength(2);
+    expect(ids).toEqual(["stable-ink-layer", "stable-color-layer"]);
     expect(engine.getMainLayerId()).toBeTruthy();
     expect(engine.getLayer(engine.getMainLayerId()!)?.layerKind).toBe("object");
     expect(engine.getRasterLayerIds()).toEqual(ids);

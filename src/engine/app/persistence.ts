@@ -2,6 +2,115 @@
 import { S } from "./scope";
 import { initHostBridge } from "./host-bridge";
 
+export function shouldPaintPersistedLayerRaster(
+  hasPdf: boolean,
+  pdfRestored: boolean,
+  rasterMode?: string,
+): boolean {
+  return !hasPdf || !pdfRestored || rasterMode === 'drawing-only';
+}
+
+async function blobFingerprint(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (globalThis.crypto?.subtle) {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+    return Array.from(new Uint8Array(digest), (value) =>
+      value.toString(16).padStart(2, '0')).join('');
+  }
+  // Browser fallback for environments without SubtleCrypto.
+  let hash = 2166136261;
+  for (const value of bytes) {
+    hash ^= value;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${bytes.length}:${hash >>> 0}`;
+}
+
+export async function findDuplicateLegacyPdfRasterIndexes(
+  layers: Array<{ pdf?: { rasterMode?: string } | null; raster_path?: string | null }>,
+  blobs: Array<Blob | null>,
+): Promise<Set<number>> {
+  const legacyPdfIndexes = layers
+    .map((layer, index) => ({ layer, index }))
+    .filter(({ layer, index }) =>
+      Boolean(layer.pdf) &&
+      layer.pdf?.rasterMode !== 'drawing-only' &&
+      Boolean(blobs[index]));
+  if (!legacyPdfIndexes.length) return new Set();
+
+  const duplicateIndexes = new Set<number>();
+  const pdfFingerprints = new Map<number, string>();
+  for (const { index } of legacyPdfIndexes) {
+    pdfFingerprints.set(index, await blobFingerprint(blobs[index]!));
+  }
+
+  for (let index = 0; index < layers.length; index++) {
+    if (layers[index]?.pdf || !blobs[index]) continue;
+    for (const pdfEntry of legacyPdfIndexes) {
+      const samePath =
+        Boolean(layers[index]?.raster_path) &&
+        layers[index]?.raster_path === pdfEntry.layer.raster_path;
+      const sameBytes =
+        blobs[index]!.size === blobs[pdfEntry.index]!.size &&
+        await blobFingerprint(blobs[index]!) === pdfFingerprints.get(pdfEntry.index);
+      if (samePath || sameBytes) {
+        duplicateIndexes.add(index);
+        break;
+      }
+    }
+  }
+  return duplicateIndexes;
+}
+
+export function pdfRasterContentSimilarity(
+  candidate: Uint8ClampedArray,
+  reference: Uint8ClampedArray,
+): number {
+  const length = Math.min(candidate.length, reference.length);
+  let contentPixels = 0;
+  let matchingPixels = 0;
+  for (let offset = 0; offset + 3 < length; offset += 4) {
+    const refAlpha = reference[offset + 3]!;
+    const refLuma =
+      reference[offset]! * 0.299 +
+      reference[offset + 1]! * 0.587 +
+      reference[offset + 2]! * 0.114;
+    // Ignore transparent and near-white page background; compare actual PDF
+    // linework/text so an ordinary blank/white sketch cannot be misidentified.
+    if (refAlpha < 64 || refLuma > 242) continue;
+    contentPixels += 1;
+    if (candidate[offset + 3]! < 64) continue;
+    const difference =
+      Math.abs(candidate[offset]! - reference[offset]!) +
+      Math.abs(candidate[offset + 1]! - reference[offset + 1]!) +
+      Math.abs(candidate[offset + 2]! - reference[offset + 2]!);
+    if (difference <= 90) matchingPixels += 1;
+  }
+  return contentPixels >= 100 ? matchingPixels / contentPixels : 0;
+}
+
+export function clearMatchingPdfPixels(
+  candidate: Uint8ClampedArray,
+  reference: Uint8ClampedArray,
+): number {
+  const length = Math.min(candidate.length, reference.length);
+  let cleared = 0;
+  for (let offset = 0; offset + 3 < length; offset += 4) {
+    if (reference[offset + 3]! < 64 || candidate[offset + 3]! < 64) continue;
+    const difference =
+      Math.abs(candidate[offset]! - reference[offset]!) +
+      Math.abs(candidate[offset + 1]! - reference[offset + 1]!) +
+      Math.abs(candidate[offset + 2]! - reference[offset + 2]!);
+    if (difference > 90) continue;
+    candidate[offset] = 0;
+    candidate[offset + 1] = 0;
+    candidate[offset + 2] = 0;
+    candidate[offset + 3] = 0;
+    cleared += 1;
+  }
+  return cleared;
+}
+
 export function initPersistence() {
   const state = S.state;
 
@@ -12,8 +121,8 @@ export function initPersistence() {
 
   /* =================================================================
      AUTOSAVE — debounced persistence to IndexedDB so a crash, refresh,
-     or accidental close never loses work. Stores a composite PNG per
-     layer plus document metadata; restores on next launch.
+     or accidental close never loses work. Stores a raster per layer
+     plus document metadata; PDF sources remain separate live assets.
      ================================================================= */
   S.AUTOSAVE_DB = 'nm-trace', S.AUTOSAVE_STORE = 'doc';
   S.autosaveKey = function autosaveKey() {
@@ -188,20 +297,11 @@ export function initPersistence() {
           // Skip the temp-composite when the layer has no live (un-baked) image —
           // encode the drawing canvas directly. Most layers take this fast path.
           let sourceCanvas = l.canvas;
-          if ((l.imageCanvas && !l.imageBaked) || (l.pdf && l.pdfCanvas)) {
+          if (l.imageCanvas && !l.imageBaked && !l.pdf) {
             const tmp = document.createElement('canvas');
             tmp.width = S.doc.wPx; tmp.height = S.doc.hPx;
             const tc = tmp.getContext('2d') as any;
-            if (l.imageCanvas && !l.pdf) tc.drawImage(l.imageCanvas, 0, 0);
-            if (l.pdf && l.pdfCanvas && l.imageTransform) {
-              const t = l.imageTransform;
-              tc.save();
-              tc.globalAlpha = l.imageOpacity ?? 1;
-              tc.translate(t.x, t.y);
-              tc.rotate((t.rotation || 0) * Math.PI / 180);
-              tc.drawImage(l.pdfCanvas, -t.w / 2, -t.h / 2, t.w, t.h);
-              tc.restore();
-            }
+            tc.drawImage(l.imageCanvas, 0, 0);
             tc.drawImage(l.canvas, 0, 0);
             sourceCanvas = tmp;
           }
@@ -212,10 +312,16 @@ export function initPersistence() {
           await Promise.resolve();   // yield between layers
         }
         layerData.push({
+          layer_id: l.engineId,
           name: l.name, visible: l.visible, opacity: l.opacity,
           trace: l.trace, blendMode: l.blendMode,
           blob: l._savedBlob, raster_path: l._rasterPath || null,
-          pdf: l.pdf ? { ...l.pdf, transform: { ...l.imageTransform }, opacity: l.imageOpacity ?? 1 } : null,
+          pdf: l.pdf ? {
+            ...l.pdf,
+            transform: { ...l.imageTransform },
+            opacity: l.imageOpacity ?? 1,
+            rasterMode: 'drawing-only',
+          } : null,
           pdfBlob: l.pdfBlob || null,
         });
       }
@@ -486,7 +592,19 @@ export function initPersistence() {
       const layers = saved.layers.map((layer: any, i: any) => {
         if (layer.blob && layer.blob.size > 0) return layer;
         if (layer.raster_url || layer.rasterUrl) return layer;
-        const fromLocal = local.layers[i];
+        const sameLayerType = (candidate: any) => Boolean(candidate?.pdf) === Boolean(layer?.pdf);
+        const layerId = typeof layer.layer_id === 'string' ? layer.layer_id : null;
+        const identifiedLocal = layerId
+          ? local.layers.find((candidate: any) => candidate?.layer_id === layerId)
+          : null;
+        const namedCandidates = local.layers.filter((candidate: any) =>
+          sameLayerType(candidate) && candidate?.name === layer?.name);
+        const namedLocal = namedCandidates.length === 1 ? namedCandidates[0] : null;
+        const indexedLocal = local.layers[i];
+        const localHasStableIds = local.layers.some((candidate: any) => candidate?.layer_id);
+        const fromLocal = identifiedLocal || (!layerId
+          ? namedLocal || (!localHasStableIds && sameLayerType(indexedLocal) ? indexedLocal : null)
+          : null);
         if (fromLocal?.blob && fromLocal.blob.size > 0) {
           return { ...layer, blob: fromLocal.blob };
         }
@@ -513,6 +631,86 @@ export function initPersistence() {
     } catch (_) {
       return saved;
     }
+  }
+
+  S.repairCrossLayerPdfCopies = function repairCrossLayerPdfCopies() {
+    const pdfLayers = (state.layers || []).filter((layer: any) =>
+      layer?.pdf && layer.pdfCanvas && layer.imageTransform);
+    const rasterLayers = (state.layers || []).filter((layer: any) =>
+      layer && !layer.pdf && layer.canvas);
+    if (!pdfLayers.length || !rasterLayers.length) return false;
+
+    const thumbScale = Math.min(1, 320 / Math.max(S.doc.wPx, S.doc.hPx));
+    const thumbWidth = Math.max(1, Math.round(S.doc.wPx * thumbScale));
+    const thumbHeight = Math.max(1, Math.round(S.doc.hPx * thumbScale));
+    let repaired = false;
+
+    for (const pdfLayer of pdfLayers) {
+      const transform = pdfLayer.imageTransform;
+      const pdfCanvas = pdfLayer.pdfCanvas;
+      if (!transform || !pdfCanvas) continue;
+      const referenceThumb = document.createElement('canvas');
+      referenceThumb.width = thumbWidth;
+      referenceThumb.height = thumbHeight;
+      const referenceThumbCtx = referenceThumb.getContext('2d') as CanvasRenderingContext2D;
+      referenceThumbCtx.scale(thumbScale, thumbScale);
+      referenceThumbCtx.translate(transform.x, transform.y);
+      referenceThumbCtx.rotate((transform.rotation || 0) * Math.PI / 180);
+      referenceThumbCtx.drawImage(
+        pdfCanvas,
+        -transform.w / 2,
+        -transform.h / 2,
+        transform.w,
+        transform.h,
+      );
+      const referenceThumbData = referenceThumbCtx.getImageData(
+        0, 0, thumbWidth, thumbHeight);
+
+      for (const layer of rasterLayers) {
+        const candidateThumb = document.createElement('canvas');
+        candidateThumb.width = thumbWidth;
+        candidateThumb.height = thumbHeight;
+        const candidateThumbCtx = candidateThumb.getContext('2d') as CanvasRenderingContext2D;
+        candidateThumbCtx.drawImage(
+          layer.canvas,
+          0, 0, S.doc.wPx, S.doc.hPx,
+          0, 0, thumbWidth, thumbHeight,
+        );
+        const candidateThumbData = candidateThumbCtx.getImageData(
+          0, 0, thumbWidth, thumbHeight);
+        const similarity = pdfRasterContentSimilarity(
+          candidateThumbData.data,
+          referenceThumbData.data,
+        );
+        if (similarity < 0.72) continue;
+
+        const reference = document.createElement('canvas');
+        reference.width = S.doc.wPx;
+        reference.height = S.doc.hPx;
+        const referenceCtx = reference.getContext('2d') as CanvasRenderingContext2D;
+        referenceCtx.translate(transform.x, transform.y);
+        referenceCtx.rotate((transform.rotation || 0) * Math.PI / 180);
+        referenceCtx.drawImage(
+          pdfCanvas,
+          -transform.w / 2,
+          -transform.h / 2,
+          transform.w,
+          transform.h,
+        );
+        const candidateData = layer.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
+        const referenceData = referenceCtx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
+        if (!clearMatchingPdfPixels(candidateData.data, referenceData.data)) continue;
+        layer.ctx.putImageData(candidateData, 0, 0);
+        layer._dirty = true;
+        layer._savedBlob = null;
+        layer._rasterPath = null;
+        const meta = S.layerEngine?.getLayer(layer.engineId);
+        if (meta) meta.rasterPath = null;
+        S.saveSnapshot(layer);
+        repaired = true;
+      }
+    }
+    return repaired;
   }
 
   /** Apply a LegacyStudioDocument into live engine state. Caller manages hydration flags. */
@@ -544,6 +742,11 @@ export function initPersistence() {
     const engineIds = S.layerEngine
       ? S.layerEngine.rebuildFromLegacyLayers(saved.layers, saved.activeLayer ?? 0)
       : [];
+    const resolvedLayerBlobs = await Promise.all(
+      saved.layers.map((layer: any) => S.resolveLayerBlob(layer)),
+    );
+    const duplicatePdfRasterIndexes =
+      await findDuplicateLegacyPdfRasterIndexes(saved.layers, resolvedLayerBlobs);
     for (let i = 0; i < saved.layers.length; i++) {
       const ld = saved.layers[i];
       const engineId = engineIds[i];
@@ -575,26 +778,48 @@ export function initPersistence() {
           meta.rasterPath = ld.raster_path || null;
         }
       }
-      const blob = await S.resolveLayerBlob(ld);
-      if (blob) {
-        try {
-          const bmp = await createImageBitmap(blob);
-          layer.ctx.drawImage(bmp, 0, 0);
-          bmp.close && bmp.close();
-          layer._savedBlob = blob;
-        } catch (_) { /* skip a corrupt layer image */ }
-      }
+      const blob = resolvedLayerBlobs[i];
+      let pdfRestored = false;
       if (layer.pdf && (layer.pdfBlob || layer.pdfUrl) && typeof S.loadPdfRuntime === 'function') {
         try {
           await S.loadPdfRuntime(layer, layer.pdfBlob || layer.pdfUrl);
+          pdfRestored = true;
         } catch (error) {
           console.warn('PDF source restore failed; using raster fallback', error);
         }
+      }
+      if (blob) {
+        try {
+          if (!duplicatePdfRasterIndexes.has(i) && shouldPaintPersistedLayerRaster(
+            Boolean(layer.pdf),
+            pdfRestored,
+            ld.pdf?.rasterMode,
+          )) {
+            const bmp = await createImageBitmap(blob);
+            layer.ctx.drawImage(bmp, 0, 0);
+            bmp.close && bmp.close();
+          }
+          layer._savedBlob = duplicatePdfRasterIndexes.has(i) ? null : blob;
+        } catch (_) { /* skip a corrupt layer image */ }
+      }
+      if (duplicatePdfRasterIndexes.has(i)) {
+        // Repair documents corrupted by the former index-based raster upload:
+        // an exact copy of a legacy PDF fallback must not live on Sketch.
+        layer._dirty = true;
+        layer._rasterPath = null;
+      }
+      if (pdfRestored && ld.pdf?.rasterMode !== 'drawing-only') {
+        // Legacy PDF rasters contain the PDF page itself. Do not paint that
+        // composite beside the live PDF, and migrate the next save to a clean
+        // drawing-only raster so moving/hiding the PDF cannot reveal a ghost.
+        layer._dirty = true;
+        layer._savedBlob = null;
       }
       layer.history = []; layer.redo = [];
       S.saveSnapshot(layer);
     }
     if (S.layerEngine) S.syncStateLayersFromEngine();
+    const repairedCrossLayerPdf = S.repairCrossLayerPdfCopies();
     state.activeLayer = Math.min(saved.activeLayer ?? state.layers.length - 1, state.layers.length - 1);
     if (S.layerEngine && state.layers[state.activeLayer]?.engineId) {
       S.layerEngine.setActiveLayer(state.layers[state.activeLayer].engineId);
@@ -638,6 +863,9 @@ export function initPersistence() {
     S.fitToScreen();
     S.updateLayerOrder(); S.renderLayers(); S.updateUI();
     S.refreshMeasurements(); S.renderSchedule();
+    if (repairedCrossLayerPdf) {
+      setTimeout(() => S.scheduleAutosave(), 0);
+    }
   }
 
   // Host postMessage / import-export bridge (restoreSession, sketchtrudeEngine API).

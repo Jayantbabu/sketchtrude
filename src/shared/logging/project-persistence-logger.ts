@@ -6,6 +6,7 @@ export type ProjectPersistenceEventName =
   | "project_load_completed"
   | "project_save_requested"
   | "project_local_save_completed"
+  | "project_local_save_failed"
   | "project_cloud_save_started"
   | "project_cloud_save_completed"
   | "project_cloud_save_failed"

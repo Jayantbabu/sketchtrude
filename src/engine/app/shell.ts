@@ -47,7 +47,7 @@ export function initShell() {
     else if (e.key === 'a') S.setTool('area');
     else if (e.key === 's') S.setTool('stencil');
     else if (e.key === 'h') S.setTool('hand');
-    else if (e.key === 'i') S.setTool('brushes');
+    else if (e.key === 'i') S.openDrawToolMenu?.();
     else if (e.key === 'k') S.setTool('wall');
     else if (e.key === 'j') S.setTool('opening');
     else if (e.key === 'x') S.setTool('wand');
