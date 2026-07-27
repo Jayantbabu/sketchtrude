@@ -1,6 +1,17 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildStoragePath, getSignedUrl } from "@/lib/storage";
 
+export type PdfLayerDescriptor = {
+  storagePath: string | null;
+  originalName: string;
+  byteSize: number;
+  pageNumber: number;
+  pageWidth: number;
+  pageHeight: number;
+  transform: { x: number; y: number; w: number; h: number; rotation: number };
+  opacity: number;
+};
+
 export type StudioLayerMeta = {
   name: string;
   visible: boolean;
@@ -8,6 +19,8 @@ export type StudioLayerMeta = {
   trace?: number;
   blendMode?: string;
   raster_path?: string | null;
+  pdf?: PdfLayerDescriptor | null;
+  pdf_url?: string | null;
 };
 
 export type StudioDocument = {
@@ -44,14 +57,20 @@ export async function attachLayerRasterUrls(
   document: StudioDocument,
 ): Promise<
   StudioDocument & {
-    layers: Array<StudioLayerMeta & { raster_url?: string | null }>;
+    layers: Array<StudioLayerMeta & { raster_url?: string | null; pdf_url?: string | null }>;
   }
 > {
   const layers = await Promise.all(
     document.layers.map(async (layer) => {
-      if (!layer.raster_path) return { ...layer, raster_url: null };
-      const raster_url = await getSignedUrl("layer-rasters", layer.raster_path, 3600);
-      return { ...layer, raster_url };
+      const [raster_url, pdf_url] = await Promise.all([
+        layer.raster_path
+          ? getSignedUrl("layer-rasters", layer.raster_path, 3600)
+          : Promise.resolve(null),
+        layer.pdf?.storagePath
+          ? getSignedUrl("user-assets", layer.pdf.storagePath, 3600)
+          : Promise.resolve(null),
+      ]);
+      return { ...layer, raster_url, pdf_url };
     }),
   );
   return { ...document, layers };

@@ -1,10 +1,12 @@
 /* Auto-converted from public/engine/app/03-layers.js — shared scope S */
 import { S } from "./scope";
 import { capHistory } from "./history";
+import { getDocument, GlobalWorkerOptions } from "pdfjs-dist";
 
 export function initLayers() {
   const state = S.state;
   S.capHistory = capHistory;
+  GlobalWorkerOptions.workerSrc = '/engine/pdf.worker.min.mjs';
 
   /* =================== LAYERS =================== */
   S.createLayer = function createLayer(name: any, opts: any) {
@@ -47,19 +49,18 @@ export function initLayers() {
     return layer;
   }
 
-  // Import an image as a new layer.
-  S.importImageAsLayer = function importImageAsLayer(file: any, replaceLayer: any) {
-    // If we're replacing an existing image in a layer, pick that target
-    if (!replaceLayer && state.replaceImageInLayer) {
-      replaceLayer = state.replaceImageInLayer;
-      state.replaceImageInLayer = null;
-    }
-    const reader = new FileReader();
-    reader.onload = (ev: any) => {
-      const dataUrl = ev.target.result;
+  S.importDataUrlAsLayer = function importDataUrlAsLayer(dataUrl: any, name: any, replaceLayer: any) {
+    return new Promise<any>((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
-        const targetLayer = replaceLayer || S.createLayer(file.name.replace(/\.[^.]+$/, '').slice(0, 32) || 'Image');
+        const targetLayer = replaceLayer || S.createLayer(String(name || 'Image').slice(0, 32));
+        if (targetLayer.pdf) {
+          try { if (targetLayer.pdfRenderTask) targetLayer.pdfRenderTask.cancel(); } catch (_) {}
+          try { if (targetLayer.pdfDocument) targetLayer.pdfDocument.destroy(); } catch (_) {}
+          try { if (targetLayer.pdfCanvas) targetLayer.pdfCanvas.remove(); } catch (_) {}
+          targetLayer.pdf = null; targetLayer.pdfBlob = null; targetLayer.pdfUrl = null;
+          targetLayer.pdfCanvas = null; targetLayer.pdfDocument = null; targetLayer.pdfPage = null;
+        }
         // Fit image inside the document while preserving aspect.
         const aspect = img.naturalWidth / img.naturalHeight;
         let w, h;
@@ -87,8 +88,214 @@ export function initLayers() {
         S.renderLayers();
         S.updateUI();
         S.showHint('Image imported as layer · drag to move, corners to scale, top handle to rotate');
+        S.scheduleAutosave();
+        resolve(targetLayer);
       };
+      img.onerror = () => reject(new Error('The imported image could not be decoded'));
       img.src = dataUrl;
+    });
+  }
+
+  S.uploadPdfAsset = async function uploadPdfAsset(blob: any) {
+    const pid = typeof window !== 'undefined' ? (window as any).__SKETCHTRUDE_PROJECT_ID : null;
+    if (!pid || pid === 'local' || !blob) return null;
+    const form = new FormData();
+    form.append('file', blob, blob.name || 'source.pdf');
+    const response = await fetch(`/api/projects/${pid}/assets/pdf`, {
+      method: 'POST',
+      body: form,
+      credentials: 'same-origin',
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return response.json();
+  }
+
+  S.ensurePdfCanvas = function ensurePdfCanvas(layer: any) {
+    if (layer.pdfCanvas) return layer.pdfCanvas;
+    const canvas = document.createElement('canvas');
+    canvas.className = 'pdf-layer-canvas';
+    canvas.style.position = 'absolute';
+    canvas.style.pointerEvents = 'none';
+    canvas.style.transformOrigin = 'center center';
+    S.paper.insertBefore(canvas, layer.canvas || S.rulerOverlay);
+    layer.pdfCanvas = canvas;
+    return canvas;
+  }
+
+  S.updatePdfCanvasStyle = function updatePdfCanvasStyle(layer: any) {
+    if (!layer.pdfCanvas || !layer.imageTransform) return;
+    const t = layer.imageTransform;
+    const canvas = layer.pdfCanvas;
+    canvas.style.left = `${t.x - t.w / 2}px`;
+    canvas.style.top = `${t.y - t.h / 2}px`;
+    canvas.style.width = `${t.w}px`;
+    canvas.style.height = `${t.h}px`;
+    canvas.style.transform = `rotate(${t.rotation || 0}deg)`;
+    canvas.style.opacity = layer.visible === false
+      ? '0'
+      : String((layer.opacity ?? 1) * (layer.imageOpacity ?? 1));
+  }
+
+  S.pdfTargetSize = function pdfTargetSize(layer: any) {
+    const t = layer.imageTransform;
+    const pdf = layer.pdf;
+    if (!t || !pdf) return null;
+    const screenScale = Math.max(0.01, (state.zoom || 1) * (state.baseZoom || 1));
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    let width = Math.max(1, Math.ceil(t.w * screenScale * dpr));
+    let height = Math.max(1, Math.ceil(t.h * screenScale * dpr));
+    const sideScale = Math.min(1, 8192 / Math.max(width, height));
+    const areaScale = Math.min(1, Math.sqrt((24 * 1024 * 1024) / Math.max(1, width * height)));
+    const limit = Math.min(sideScale, areaScale);
+    width = Math.max(1, Math.floor(width * limit));
+    height = Math.max(1, Math.floor(height * limit));
+    return { width, height };
+  }
+
+  S.renderPdfLayer = async function renderPdfLayer(layer: any, force: any) {
+    if (!layer.pdfPage || !layer.pdf || !layer.imageTransform || layer.visible === false) return;
+    const target = S.pdfTargetSize(layer);
+    if (!target) return;
+    if (!force && layer.pdfRenderedWidth &&
+        Math.abs(target.width - layer.pdfRenderedWidth) / Math.max(1, layer.pdfRenderedWidth) < 0.22) {
+      S.updatePdfCanvasStyle(layer);
+      return;
+    }
+    try { if (layer.pdfRenderTask) layer.pdfRenderTask.cancel(); } catch (_) {}
+    const generation = (layer.pdfRenderGeneration || 0) + 1;
+    layer.pdfRenderGeneration = generation;
+    const scale = target.width / Math.max(1, layer.pdf.pageWidth);
+    const viewport = layer.pdfPage.getViewport({ scale });
+    const temp = document.createElement('canvas');
+    temp.width = Math.max(1, Math.ceil(viewport.width));
+    temp.height = Math.max(1, Math.ceil(viewport.height));
+    const context = temp.getContext('2d') as CanvasRenderingContext2D;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, temp.width, temp.height);
+    const task = layer.pdfPage.render({ canvas: temp, canvasContext: context, viewport } as any);
+    layer.pdfRenderTask = task;
+    try {
+      await task.promise;
+      if (generation !== layer.pdfRenderGeneration) return;
+      const canvas = S.ensurePdfCanvas(layer);
+      canvas.width = temp.width;
+      canvas.height = temp.height;
+      (canvas.getContext('2d') as any).drawImage(temp, 0, 0);
+      layer.pdfRenderedWidth = target.width;
+      layer.pdfRenderTask = null;
+      S.updatePdfCanvasStyle(layer);
+    } catch (error: any) {
+      if (error?.name !== 'RenderingCancelledException') console.warn('PDF render failed', error);
+    }
+  }
+
+  S.loadPdfRuntime = async function loadPdfRuntime(layer: any, source: any) {
+    if (!layer.pdf || !source) return;
+    let blob: Blob;
+    if (source instanceof Blob) blob = source;
+    else {
+      const response = await fetch(source, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error('PDF source could not be loaded');
+      blob = await response.blob();
+    }
+    layer.pdfBlob = blob;
+    const loadingTask = getDocument({ data: new Uint8Array(await blob.arrayBuffer()) });
+    layer.pdfDocument = await loadingTask.promise;
+    layer.pdfPage = await layer.pdfDocument.getPage(layer.pdf.pageNumber);
+    S.ensurePdfCanvas(layer);
+    S.updatePdfCanvasStyle(layer);
+    await S.renderPdfLayer(layer, true);
+  }
+
+  S._pdfRenderTimer = null;
+  S.schedulePdfRenders = function schedulePdfRenders() {
+    clearTimeout(S._pdfRenderTimer);
+    S._pdfRenderTimer = setTimeout(() => {
+      (state.layers || []).forEach((layer: any) => {
+        if (layer.pdf) S.renderPdfLayer(layer, false);
+      });
+    }, 160);
+  }
+
+  S.importPdfAsLayer = async function importPdfAsLayer(file: any, replaceLayer: any) {
+    try {
+      S.showHint('Opening PDF…');
+      if (file.size > 50 * 1024 * 1024) throw new Error('PDF exceeds the 50 MiB limit');
+      const pdfBlob = file.slice(0, file.size, 'application/pdf');
+      const bytes = new Uint8Array(await pdfBlob.arrayBuffer());
+      const pdf = await getDocument({ data: bytes }).promise;
+      let pageNumber = 1;
+      if (pdf.numPages > 1) {
+        const answer = window.prompt(`This PDF has ${pdf.numPages} pages. Which page should be imported?`, '1');
+        if (answer == null) return;
+        pageNumber = Math.max(1, Math.min(pdf.numPages, Math.round(Number(answer) || 1)));
+      }
+      const page = await pdf.getPage(pageNumber);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const longestSide = Math.max(baseViewport.width, baseViewport.height);
+      const renderScale = Math.max(1, Math.min(2.5, 2800 / Math.max(1, longestSide)));
+      const viewport = page.getViewport({ scale: renderScale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const canvasContext = canvas.getContext('2d') as CanvasRenderingContext2D;
+      await page.render({ canvas, canvasContext, viewport } as any).promise;
+      const baseName = file.name.replace(/\.pdf$/i, '').slice(0, 24) || 'PDF';
+      const layer = await S.importDataUrlAsLayer(
+        canvas.toDataURL('image/png'),
+        `${baseName} p${pageNumber}`,
+        replaceLayer,
+      );
+      layer.pdf = {
+        storagePath: null,
+        originalName: file.name,
+        byteSize: file.size,
+        pageNumber,
+        pageWidth: baseViewport.width,
+        pageHeight: baseViewport.height,
+        transform: { ...layer.imageTransform },
+        opacity: layer.imageOpacity,
+      };
+      layer.pdfBlob = pdfBlob;
+      layer.pdfDocument = pdf;
+      layer.pdfPage = page;
+      S.ensurePdfCanvas(layer);
+      (layer.imageCtx as any).clearRect(0, 0, S.doc.wPx, S.doc.hPx);
+      await S.renderPdfLayer(layer, true);
+      S.updateLayerOrder();
+      S.uploadPdfAsset(file).then((asset: any) => {
+        if (!asset || !layer.pdf) return;
+        layer.pdf.storagePath = asset.storagePath;
+        layer.pdfUrl = asset.signedUrl;
+        S.scheduleAutosave();
+      }).catch((error: any) => console.warn('PDF cloud upload deferred', error));
+      S.scheduleAutosave();
+      S.showHint(`PDF page ${pageNumber} imported as layer`);
+    } catch (error) {
+      console.warn('PDF import failed', error);
+      S.showHint('PDF import failed · try a different file');
+    }
+  }
+
+  // Import an image or a selected PDF page as a new layer.
+  S.importImageAsLayer = function importImageAsLayer(file: any, replaceLayer: any) {
+    if (!replaceLayer && state.replaceImageInLayer) {
+      replaceLayer = state.replaceImageInLayer;
+      state.replaceImageInLayer = null;
+    }
+    if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
+      return S.importPdfAsLayer(file, replaceLayer);
+    }
+    const reader = new FileReader();
+    reader.onload = (ev: any) => {
+      S.importDataUrlAsLayer(
+        ev.target.result,
+        file.name.replace(/\.[^.]+$/, '') || 'Image',
+        replaceLayer,
+      ).catch((error: any) => {
+        console.warn('Image import failed', error);
+        S.showHint('Image import failed · try a different file');
+      });
     };
     reader.readAsDataURL(file);
   }
@@ -117,6 +324,13 @@ export function initLayers() {
     const ctx = layer.imageCtx;
     ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
     if (!layer.image || layer.imageBaked) return;
+    if (layer.pdf) {
+      layer.pdf.transform = { ...layer.imageTransform };
+      layer.pdf.opacity = layer.imageOpacity ?? 1;
+      S.updatePdfCanvasStyle(layer);
+      S.schedulePdfRenders();
+      return;
+    }
     const t = layer.imageTransform;
     ctx.save();
     ctx.globalAlpha = layer.imageOpacity;
@@ -137,7 +351,19 @@ export function initLayers() {
     if (!layer.image || layer.imageBaked) return;
     layer.ctx.save();
     layer.ctx.globalAlpha = layer.imageOpacity;
-    layer.ctx.drawImage(layer.imageCanvas, 0, 0);
+    if (layer.pdf && layer.pdfCanvas && layer.imageTransform) {
+      const t = layer.imageTransform;
+      layer.ctx.translate(t.x, t.y);
+      layer.ctx.rotate((t.rotation || 0) * Math.PI / 180);
+      layer.ctx.drawImage(layer.pdfCanvas, -t.w / 2, -t.h / 2, t.w, t.h);
+      try { if (layer.pdfRenderTask) layer.pdfRenderTask.cancel(); } catch (_) {}
+      try { if (layer.pdfDocument) layer.pdfDocument.destroy(); } catch (_) {}
+      try { layer.pdfCanvas.remove(); } catch (_) {}
+      layer.pdf = null; layer.pdfBlob = null; layer.pdfUrl = null;
+      layer.pdfCanvas = null; layer.pdfDocument = null; layer.pdfPage = null;
+    } else {
+      layer.ctx.drawImage(layer.imageCanvas, 0, 0);
+    }
     layer.ctx.restore();
     (layer.imageCanvas.getContext('2d') as any).clearRect(0, 0, S.doc.wPx, S.doc.hPx);
     layer.imageBaked = true;
@@ -156,6 +382,15 @@ export function initLayers() {
         l.imageCanvas.style.opacity = l.visible ? 1 : 0;
         l.imageCanvas.style.pointerEvents = 'none';
       }
+      if (l.pdfCanvas) {
+        l.pdfCanvas.style.zIndex = (i * 2 + 2).toString();
+        l.pdfCanvas.style.display = l.visible === false ? 'none' : 'block';
+        l.pdfCanvas.style.mixBlendMode = (l.blendMode && l.blendMode !== 'source-over') ? l.blendMode : '';
+        l.pdfCanvas.style.filter = l.trace > 0
+          ? `sepia(${l.trace * 0.4}) saturate(${1 + l.trace * 0.5}) hue-rotate(-10deg)`
+          : '';
+        S.updatePdfCanvasStyle(l);
+      }
       l.canvas.style.zIndex = (i * 2 + 3).toString();
       l.canvas.style.opacity = l.visible ? l.opacity : 0;
       // Mix-blend-mode on the draw canvas implements layer blend modes
@@ -173,6 +408,7 @@ export function initLayers() {
     // pointer-events: all set in CSS; individual non-interactive elements get pointer-events:none explicitly
     // Refresh image overlay visibility for active layer
     S.refreshImageOverlay();
+    if (state.layers.some((layer: any) => layer.pdf)) S.schedulePdfRenders();
   }
 
   S.activeLayer = function activeLayer() { return state.layers[state.activeLayer]; }
@@ -651,8 +887,20 @@ export function initLayers() {
      LAYER OPERATIONS — duplicate, flip (mirror), merge, clear,
      and free transform (move/scale/rotate) via the image overlay.
      ================================================================= */
+  S.drawPdfLayerToCtx = function drawPdfLayerToCtx(layer: any, ctx: any) {
+    if (!layer.pdf || !layer.pdfCanvas || !layer.imageTransform) return;
+    const t = layer.imageTransform;
+    ctx.save();
+    ctx.globalAlpha *= layer.imageOpacity ?? 1;
+    ctx.translate(t.x, t.y);
+    ctx.rotate((t.rotation || 0) * Math.PI / 180);
+    ctx.drawImage(layer.pdfCanvas, -t.w / 2, -t.h / 2, t.w, t.h);
+    ctx.restore();
+  }
+
   S.layerCompositeToCtx = function layerCompositeToCtx(src: any, ctx: any) {
-    if (src.imageCanvas && !src.imageBaked) ctx.drawImage(src.imageCanvas, 0, 0);
+    if (src.pdf) S.drawPdfLayerToCtx(src, ctx);
+    else if (src.imageCanvas && !src.imageBaked) ctx.drawImage(src.imageCanvas, 0, 0);
     ctx.drawImage(src.canvas, 0, 0);
   }
 
@@ -775,7 +1023,12 @@ export function initLayers() {
     if (!l) return;
     l.ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
     if (l.imageCanvas) (l.imageCtx as any).clearRect(0, 0, S.doc.wPx, S.doc.hPx);
+    try { if (l.pdfRenderTask) l.pdfRenderTask.cancel(); } catch (_) {}
+    try { if (l.pdfDocument) l.pdfDocument.destroy(); } catch (_) {}
+    try { if (l.pdfCanvas) l.pdfCanvas.remove(); } catch (_) {}
     l.image = null; l.imageBaked = false; l.imageTransform = null;
+    l.pdf = null; l.pdfBlob = null; l.pdfUrl = null; l.pdfCanvas = null;
+    l.pdfDocument = null; l.pdfPage = null; l.pdfRenderTask = null;
     l._savedBlob = null;   // force re-encode — do not reuse pre-clear PNG
     l._rasterPath = null;  // force cloud re-upload on next parent save
     S.hideImageOverlay();

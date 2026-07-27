@@ -4,6 +4,7 @@
  * for the iframe runtime.
  */
 import * as esbuild from "esbuild";
+import { copyFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -11,6 +12,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const entry = path.join(root, "src/engine/app/boot.ts");
 const outfile = path.join(root, "public/engine/studio.js");
+const pdfWorkerSource = path.join(root, "node_modules/pdfjs-dist/build/pdf.worker.min.mjs");
+const pdfWorkerOutfile = path.join(root, "public/engine/pdf.worker.min.mjs");
 const watch = process.argv.includes("--watch");
 
 /** @type {import('esbuild').BuildOptions} */
@@ -34,6 +37,7 @@ const options = {
 };
 
 async function main() {
+  await copyFile(pdfWorkerSource, pdfWorkerOutfile);
   if (watch) {
     const ctx = await esbuild.context(options);
     await ctx.watch();

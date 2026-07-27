@@ -34,12 +34,38 @@ export function initDimensions() {
     const dx = m.x2 - m.x1, dy = m.y2 - m.y1;
     const len = Math.sqrt(dx*dx + dy*dy);
     if (len < 2) return;
-    const nx = -dy / len, ny = dx / len;
-    // Scale-set preview: push dim far from the stroke so a stylus hand doesn't cover it
+    let nx = -dy / len, ny = dx / len;
+    // Scale-set preview: always place the dimension above the stroke and far
+    // enough away that a stylus hand does not cover the value.
     const settingScale = !!(isPreview && (state.pendingScale || state.pendingScaleStart));
-    const extLen = settingScale ? 96 : 28;
-    const labelOff = settingScale ? 56 : 20;
+    if (settingScale && ny > 0) { nx = -nx; ny = -ny; }
+    const viewScale = Math.max(0.01, (state.zoom || 1) * (state.baseZoom || 1));
+    const extLen = settingScale ? 160 / viewScale : 28;
+    const labelOff = settingScale ? 40 / viewScale : 20;
     const tickLen = 12;
+    if (settingScale) {
+      const mx = (m.x1 + m.x2) / 2, my = (m.y1 + m.y2) / 2;
+      const offset = extLen + labelOff;
+      const area = document.getElementById('canvas-area')?.getBoundingClientRect();
+      const matrix = S.rulerOverlay.getScreenCTM?.();
+      if (area && matrix) {
+        const overflow = (side: number) => {
+          const p = new DOMPoint(mx + nx * offset * side, my + ny * offset * side).matrixTransform(matrix);
+          const margin = 28;
+          return Math.max(0, area.left + margin - p.x) +
+            Math.max(0, p.x - area.right + margin) +
+            Math.max(0, area.top + margin - p.y) +
+            Math.max(0, p.y - area.bottom + margin);
+        };
+        if (overflow(-1) < overflow(1)) { nx = -nx; ny = -ny; }
+      } else {
+        const lx = mx + nx * offset, ly = my + ny * offset;
+        const margin = 24 / viewScale;
+        if (lx < margin || lx > S.doc.wPx - margin || ly < margin || ly > S.doc.hPx - margin) {
+          nx = -nx; ny = -ny;
+        }
+      }
+    }
 
     // Extension lines — non-interactive
     [[m.x1,m.y1],[m.x2,m.y2]].forEach(([x,y]) => {

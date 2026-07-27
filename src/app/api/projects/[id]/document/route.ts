@@ -88,6 +88,7 @@ function studioToSavedLayers(
       trace: meta?.trace ?? 0,
       blendMode: meta?.blendMode || "source-over",
       raster_path,
+      pdf: meta?.pdf ?? existing?.layers?.[i]?.pdf ?? null,
     });
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
@@ -57,21 +57,8 @@ export function DashboardClient({ initialProjects }: { initialProjects: Project[
   async function handleSignOut() {
     const supabase = createClient();
     await supabase.auth.signOut();
-    router.push("/");
-    router.refresh();
+    router.replace("/");
   }
-
-  const refreshProjects = useCallback(async () => {
-    const res = await fetch("/api/projects");
-    if (res.ok) {
-      const data = await res.json();
-      setProjects(data);
-    }
-  }, []);
-
-  useEffect(() => {
-    refreshProjects();
-  }, [refreshProjects]);
 
   return (
     <div className="dashboard">

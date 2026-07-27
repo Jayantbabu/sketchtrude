@@ -127,6 +127,7 @@ export function initShell() {
     S.paper.style.transform = `translate(-50%, -50%) scale(${state.zoom * state.baseZoom}) rotate(${state.canvasRotation}deg)`;
     $el('zoom-level').textContent = Math.round(state.zoom * 100) + '%';
     S.refreshMeasurements();
+    if (typeof S.schedulePdfRenders === 'function') S.schedulePdfRenders();
   }
 
   // Detect rotation gesture: track angle between two touches

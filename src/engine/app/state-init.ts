@@ -533,6 +533,15 @@ export function initState() {
       imageOpacity: 1.0,
       imageCrop: null,
       imageBaked: false,
+      pdf: null,
+      pdfBlob: null,
+      pdfUrl: null,
+      pdfCanvas: null,
+      pdfDocument: null,
+      pdfPage: null,
+      pdfRenderTask: null,
+      pdfRenderGeneration: 0,
+      pdfRenderedWidth: 0,
     };
     layer.ctx.lineCap = 'round';
     layer.ctx.lineJoin = 'round';
@@ -545,6 +554,9 @@ export function initState() {
     if (!surf) return;
     try { surf.canvas.remove(); } catch (_) {}
     try { if (surf.imageCanvas) surf.imageCanvas.remove(); } catch (_) {}
+    try { if (surf.pdfRenderTask) surf.pdfRenderTask.cancel(); } catch (_) {}
+    try { if (surf.pdfDocument) surf.pdfDocument.destroy(); } catch (_) {}
+    try { if (surf.pdfCanvas) surf.pdfCanvas.remove(); } catch (_) {}
     S.layerSurfaces.delete(engineId);
   }
   S.ensureRasterSurface = function ensureRasterSurface(engineId: any) {

@@ -184,6 +184,24 @@ export type EngineLayer = {
   imageCrop?: { x: number; y: number; w: number; h: number } | null;
   imageBaked?: boolean;
   imageManipulating?: boolean;
+  pdf?: {
+    storagePath: string | null;
+    originalName: string;
+    byteSize: number;
+    pageNumber: number;
+    pageWidth: number;
+    pageHeight: number;
+    transform: { x: number; y: number; w: number; h: number; rotation: number };
+    opacity: number;
+  } | null;
+  pdfBlob?: Blob | null;
+  pdfUrl?: string | null;
+  pdfCanvas?: HTMLCanvasElement | null;
+  pdfDocument?: any;
+  pdfPage?: any;
+  pdfRenderTask?: any;
+  pdfRenderGeneration?: number;
+  pdfRenderedWidth?: number;
   locked?: boolean;
   /** Legacy migration fields; `any` keeps converted modules compiling under strict. */
   [key: string]: any;

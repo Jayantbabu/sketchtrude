@@ -9,7 +9,13 @@ import { createClient } from "@/lib/supabase/client";
 export function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/dashboard";
+  const requestedRedirect = searchParams.get("redirect");
+  const redirect =
+    requestedRedirect?.startsWith("/") &&
+    !requestedRedirect.startsWith("//") &&
+    requestedRedirect !== "/login"
+      ? requestedRedirect
+      : "/dashboard";
   const registered = searchParams.get("registered");
   const registeredEmail = searchParams.get("email");
 
@@ -35,8 +41,7 @@ export function LoginForm() {
       return;
     }
 
-    router.push(redirect);
-    router.refresh();
+    router.replace(redirect);
   }
 
   return (

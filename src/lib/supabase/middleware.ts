@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
+  let applyCookieMutations: Array<(response: NextResponse) => void> = [];
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -13,6 +14,9 @@ export async function updateSession(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(cookiesToSet) {
+          applyCookieMutations = cookiesToSet.map(({ name, value, options }) =>
+            (response: NextResponse) => response.cookies.set(name, value, options)
+          );
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           );
@@ -37,7 +41,9 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("redirect", request.nextUrl.pathname);
-    return NextResponse.redirect(url);
+    const response = NextResponse.redirect(url);
+    applyCookieMutations.forEach((apply) => apply(response));
+    return response;
   }
 
   if (
@@ -47,7 +53,9 @@ export async function updateSession(request: NextRequest) {
   ) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
-    return NextResponse.redirect(url);
+    const response = NextResponse.redirect(url);
+    applyCookieMutations.forEach((apply) => apply(response));
+    return response;
   }
 
   return supabaseResponse;

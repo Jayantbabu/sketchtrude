@@ -595,6 +595,9 @@ export function initChrome() {
       S.renderImageCanvas(l);
       S.refreshImageOverlay();
       S.renderLayers();
+      l._dirty = true;
+      l._savedBlob = null;
+      S.scheduleAutosave();
     });
   }
   S.bindImageInput('img-x', (l: any, v: any) => l.imageTransform.x = S.mmToPx(v));
@@ -607,7 +610,9 @@ export function initChrome() {
   $el('img-reset').addEventListener('click', () => {
     const l = S.activeLayer();
     if (!l.image || l.imageBaked) return;
-    const aspect = l.image.naturalWidth / l.image.naturalHeight;
+    const aspect = l.pdf
+      ? l.pdf.pageWidth / l.pdf.pageHeight
+      : l.image.naturalWidth / l.image.naturalHeight;
     let w, h;
     if (S.doc.wPx / S.doc.hPx > aspect) {
       h = S.doc.hPx * 0.9; w = h * aspect;
@@ -620,6 +625,9 @@ export function initChrome() {
     S.renderImageCanvas(l);
     S.refreshImageOverlay();
     S.refreshImageProps();
+    l._dirty = true;
+    l._savedBlob = null;
+    S.scheduleAutosave();
   });
 
   $el('img-apply').addEventListener('click', () => {
@@ -805,6 +813,9 @@ export function initChrome() {
       layer.imageManipulating = false;
       S.renderImageCanvas(layer);     // final full-resolution redraw
       S.drawImageOverlay(layer);
+      layer._dirty = true;
+      layer._savedBlob = null;
+      S.scheduleAutosave();
     };
     document.addEventListener('pointermove', onMove);
     document.addEventListener('pointerup', onUp);

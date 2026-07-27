@@ -16,7 +16,8 @@ export function initFill() {
       if (l.visible === false) continue;
       ctx.save();
       ctx.globalAlpha = (l.opacity != null ? l.opacity : 1);
-      if (l.imageCanvas && !l.imageBaked) ctx.drawImage(l.imageCanvas, 0, 0);
+      if (l.pdf && typeof S.drawPdfLayerToCtx === 'function') S.drawPdfLayerToCtx(l, ctx);
+      else if (l.imageCanvas && !l.imageBaked) ctx.drawImage(l.imageCanvas, 0, 0);
       ctx.drawImage(l.canvas, 0, 0);
       ctx.restore();
     }

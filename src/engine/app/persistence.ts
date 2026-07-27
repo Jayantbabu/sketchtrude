@@ -175,15 +175,33 @@ export function initPersistence() {
       // Only re-encode layers that actually changed since the last save.
       const layerData = [];
       for (const l of state.layers) {
+        if (l.pdf && !l.pdf.storagePath && l.pdfBlob && typeof S.uploadPdfAsset === 'function') {
+          try {
+            const asset = await S.uploadPdfAsset(l.pdfBlob);
+            if (asset) {
+              l.pdf.storagePath = asset.storagePath;
+              l.pdfUrl = asset.signedUrl;
+            }
+          } catch (_) { /* remain local and retry on the next save */ }
+        }
         if (l._dirty || !l._savedBlob) {
           // Skip the temp-composite when the layer has no live (un-baked) image —
           // encode the drawing canvas directly. Most layers take this fast path.
           let sourceCanvas = l.canvas;
-          if (l.imageCanvas && !l.imageBaked) {
+          if ((l.imageCanvas && !l.imageBaked) || (l.pdf && l.pdfCanvas)) {
             const tmp = document.createElement('canvas');
             tmp.width = S.doc.wPx; tmp.height = S.doc.hPx;
             const tc = tmp.getContext('2d') as any;
-            tc.drawImage(l.imageCanvas, 0, 0);
+            if (l.imageCanvas && !l.pdf) tc.drawImage(l.imageCanvas, 0, 0);
+            if (l.pdf && l.pdfCanvas && l.imageTransform) {
+              const t = l.imageTransform;
+              tc.save();
+              tc.globalAlpha = l.imageOpacity ?? 1;
+              tc.translate(t.x, t.y);
+              tc.rotate((t.rotation || 0) * Math.PI / 180);
+              tc.drawImage(l.pdfCanvas, -t.w / 2, -t.h / 2, t.w, t.h);
+              tc.restore();
+            }
             tc.drawImage(l.canvas, 0, 0);
             sourceCanvas = tmp;
           }
@@ -197,6 +215,8 @@ export function initPersistence() {
           name: l.name, visible: l.visible, opacity: l.opacity,
           trace: l.trace, blendMode: l.blendMode,
           blob: l._savedBlob, raster_path: l._rasterPath || null,
+          pdf: l.pdf ? { ...l.pdf, transform: { ...l.imageTransform }, opacity: l.imageOpacity ?? 1 } : null,
+          pdfBlob: l.pdfBlob || null,
         });
       }
       const payload = {
@@ -363,6 +383,8 @@ export function initPersistence() {
           opacity: ld.opacity,
           trace: ld.trace,
           blendMode: ld.blendMode,
+          pdf: ld.pdf || null,
+          pdf_url: ld.pdf_url || null,
           blob: null as any,
         };
         if (ld.raster_url) {
@@ -533,6 +555,16 @@ export function initPersistence() {
       layer.trace = ld.trace || 0;
       layer.blendMode = ld.blendMode || 'source-over';
       if (ld.raster_path) layer._rasterPath = ld.raster_path;
+      if (ld.pdf) {
+        layer.pdf = { ...ld.pdf, transform: { ...ld.pdf.transform } };
+        layer.pdfBlob = ld.pdfBlob instanceof Blob ? ld.pdfBlob : null;
+        layer.pdfUrl = ld.pdf_url || ld.pdfUrl || null;
+        layer.imageTransform = { ...ld.pdf.transform };
+        layer.imageOpacity = typeof ld.pdf.opacity === 'number' ? ld.pdf.opacity : 1;
+        layer.imageBaked = false;
+        layer.image = new Image();
+        layer.image.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+      }
       if (S.layerEngine && engineId) {
         const meta = S.layerEngine.getLayer(engineId);
         if (meta) {
@@ -551,6 +583,13 @@ export function initPersistence() {
           bmp.close && bmp.close();
           layer._savedBlob = blob;
         } catch (_) { /* skip a corrupt layer image */ }
+      }
+      if (layer.pdf && (layer.pdfBlob || layer.pdfUrl) && typeof S.loadPdfRuntime === 'function') {
+        try {
+          await S.loadPdfRuntime(layer, layer.pdfBlob || layer.pdfUrl);
+        } catch (error) {
+          console.warn('PDF source restore failed; using raster fallback', error);
+        }
       }
       layer.history = []; layer.redo = [];
       S.saveSnapshot(layer);

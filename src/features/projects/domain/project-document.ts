@@ -427,6 +427,7 @@ export function createEmptyProjectDocument(
 const BLOB_LAYER_KEYS = new Set([
   "raster",
   "blob",
+  "pdfBlob",
   "imageData",
   "bitmap",
   "canvas",

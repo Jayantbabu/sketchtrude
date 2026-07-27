@@ -59,4 +59,34 @@ describe("prepareDocumentForPersistence", () => {
     expect(upload).not.toHaveBeenCalled();
     expect(out.layers[0]?.raster_path).toBe("user/proj/layers/0.png");
   });
+
+  it("preserves PDF reference metadata while stripping the local source blob", async () => {
+    const doc = createEmptyProjectDocument("proj-pdf");
+    const legacy = doc.extensions!.legacyStudio as LegacyStudioDocument;
+    const pdfBlob = new Blob(["%PDF-1.7"], { type: "application/pdf" });
+    legacy.layers = [{
+      name: "Plan p1",
+      visible: true,
+      opacity: 1,
+      raster_path: "user/proj/layers/0.png",
+      pdfBlob,
+      pdf: {
+        storagePath: "user/proj/pdf/source.pdf",
+        originalName: "source.pdf",
+        byteSize: pdfBlob.size,
+        pageNumber: 1,
+        pageWidth: 612,
+        pageHeight: 792,
+        transform: { x: 500, y: 400, w: 900, h: 1164, rotation: 0 },
+        opacity: 0.8,
+      },
+    }];
+
+    const prepared = await prepareDocumentForPersistence("proj-pdf", doc);
+    const layer = (prepared.extensions!.legacyStudio as LegacyStudioDocument).layers[0];
+
+    expect(layer?.pdfBlob).toBeUndefined();
+    expect((layer?.pdf as { storagePath?: string })?.storagePath)
+      .toBe("user/proj/pdf/source.pdf");
+  });
 });
