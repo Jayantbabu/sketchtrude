@@ -30,6 +30,7 @@ import {
   BUILTIN_BRUSH_PRESETS,
   BRUSH_CATEGORY_LABELS,
   BRUSH_FAMILIES,
+  BRUSH_SUBFAMILIES,
 } from "@/engine/brushes";
 import * as helpers from "@/lib/studio-helpers";
 import { S } from "./scope";
@@ -38,10 +39,13 @@ type BrushPreset = Record<string, unknown>;
 
 let brushReady = false;
 const brushWaiters: Array<() => void> = [];
-let brushPresets: BrushPreset[] = [...(BUILTIN_BRUSH_PRESETS as unknown as BrushPreset[])];
-let brushLabels: Record<string, string> = { ...(BRUSH_CATEGORY_LABELS as Record<string, string>) };
-let brushFamilies: Record<string, string[]> = {
+const brushPresets: BrushPreset[] = [...(BUILTIN_BRUSH_PRESETS as unknown as BrushPreset[])];
+const brushLabels: Record<string, string> = { ...(BRUSH_CATEGORY_LABELS as Record<string, string>) };
+const brushFamilies: Record<string, string[]> = {
   ...(BRUSH_FAMILIES as unknown as Record<string, string[]>),
+};
+const brushSubfamilies: Record<string, string[]> = {
+  ...(BRUSH_SUBFAMILIES as unknown as Record<string, string[]>),
 };
 
 function markBrushReady() {
@@ -56,20 +60,9 @@ function markBrushReady() {
 }
 
 async function loadBrushPresets() {
-  try {
-    const res = await fetch("/engine/brush-presets.json", {
-      credentials: "same-origin",
-    });
-    if (!res.ok) throw new Error("brush presets missing");
-    const data = await res.json();
-    brushPresets = data.presets || brushPresets;
-    brushLabels = data.labels || brushLabels;
-    brushFamilies = data.families || brushFamilies;
-  } catch (err) {
-    console.warn("Brush presets failed to load; using built-in fallback", err);
-  } finally {
-    markBrushReady();
-  }
+  // Presets are bundled with the engine so the UI and renderer can never drift
+  // apart because of a stale public JSON file.
+  markBrushReady();
 }
 
 function asLegacyBuiltinList() {
@@ -123,6 +116,7 @@ export function initCores() {
     isReady: () => brushReady,
     loadPresets: loadBrushPresets,
     getFamilies: () => brushFamilies,
+    getSubfamilies: () => brushSubfamilies,
     getCategoryLabels: () => brushLabels,
   };
 

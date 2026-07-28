@@ -8,6 +8,8 @@ export type {
   ScaleAwareSettings,
   StrokePoint,
   StrokeRecord,
+  TextureMode,
+  EraserMode,
   TipType,
 } from "./types";
 
@@ -15,6 +17,7 @@ export {
   BUILTIN_BRUSH_PRESETS,
   BRUSH_CATEGORY_LABELS,
   BRUSH_FAMILIES,
+  BRUSH_SUBFAMILIES,
   getBuiltinBrush,
 } from "./presets";
 

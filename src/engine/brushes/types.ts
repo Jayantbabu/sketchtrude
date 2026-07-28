@@ -35,6 +35,27 @@ export type BrushEngineType =
 
 export type TipType = "round" | "soft" | "texture" | "chisel" | "flat";
 
+export type TextureMode =
+  | "hatching"
+  | "crosshatching"
+  | "stippling"
+  | "brick"
+  | "concrete"
+  | "wood"
+  | "stone"
+  | "tile"
+  | "grass"
+  | "leaves"
+  | "shrubs"
+  | "trees"
+  | "ground-cover"
+  | "colored-pencil"
+  | "dry-marker"
+  | "dry-brush"
+  | "texture-eraser";
+
+export type EraserMode = "pixel" | "stroke" | "object" | "texture";
+
 export type PressureSettings = {
   size: number;
   opacity: number;
@@ -92,6 +113,8 @@ export type BrushPreset = {
   source: "built-in" | "user-created" | "imported";
   version?: number;
   grain?: "fine" | "coarse";
+  textureMode?: TextureMode;
+  eraserMode?: EraserMode;
   createdAt?: string;
   updatedAt?: string;
 };

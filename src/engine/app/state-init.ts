@@ -427,8 +427,16 @@ export function initState() {
   // (A const below whenReady caused a TDZ crash when presets loaded first, so
   // sketchtrude-engine-ready never fired.)
   S.BRUSH_FAMILIES = {
-    pen: ['pen', 'technicalpen', 'fountainpen', 'ballpoint'],
-    pencil: ['pencil', 'mechanicalpencil'],
+    pen: ['pen', 'fineliner', 'fountainpen', 'ballpoint', 'brushpen'],
+    pencil: ['mechanicalpencil', 'pencil', 'pencil-2b', 'pencil-4b', 'pencil-8b'],
+    marker: ['marker', 'marker-chisel', 'marker-alcohol', 'highlighter', 'marker-dry'],
+    brush: ['brush', 'paint-flat', 'watercolour', 'gouache', 'paint-dry'],
+    texture: ['texture', 'tex-crosshatching', 'tex-stippling', 'tex-material', 'tex-foliage'],
+    eraser: ['eraser', 'eraser-soft', 'eraser-stroke', 'eraser-object', 'eraser-texture'],
+  };
+  S.BRUSH_SUBFAMILIES = {
+    'tex-material': ['tex-brick', 'tex-concrete', 'tex-wood', 'tex-stone', 'tex-tile'],
+    'tex-foliage': ['tex-grass', 'tex-leaves', 'tex-shrubs', 'tex-trees', 'tex-ground-cover'],
   };
   S.syncBuiltinBrushesFromEngine = function syncBuiltinBrushesFromEngine() {
     const api = S.brushes;
@@ -440,6 +448,11 @@ export function initState() {
       for (const k of Object.keys(S.BRUSH_FAMILIES)) delete S.BRUSH_FAMILIES[k];
       Object.assign(S.BRUSH_FAMILIES, fam);
     }
+    const subfam = api.getSubfamilies?.();
+    if (subfam) {
+      for (const k of Object.keys(S.BRUSH_SUBFAMILIES)) delete S.BRUSH_SUBFAMILIES[k];
+      Object.assign(S.BRUSH_SUBFAMILIES, subfam);
+    }
   }
   S.isDrawTool = function isDrawTool(t: any) { return S.BUILTIN_BRUSHES.some((b: any) => b.id === t) || !!(S.brushLibraryEngine && S.brushLibraryEngine.get(t)); }
   S.brushFamilyOf = function brushFamilyOf(id: any) {
@@ -447,7 +460,12 @@ export function initState() {
       const fam = S.brushLibraryEngine.familyOf(id);
       if (fam) return fam;
     }
-    for (const fam in S.BRUSH_FAMILIES) if (S.BRUSH_FAMILIES[fam].includes(id)) return fam;
+    for (const fam in S.BRUSH_FAMILIES) {
+      if (S.BRUSH_FAMILIES[fam].includes(id)) return fam;
+      for (const parentId of S.BRUSH_FAMILIES[fam]) {
+        if (S.BRUSH_SUBFAMILIES[parentId]?.includes(id)) return fam;
+      }
+    }
     return id;
   }
   if (S.brushes) {

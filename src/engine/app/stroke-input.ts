@@ -37,6 +37,238 @@ export function initStrokeInput() {
     return 0.5;
   }
 
+  S.isProceduralBrush = function isProceduralBrush(brush: any) {
+    return !!(brush && brush.tipType === 'texture' && brush.textureMode);
+  };
+
+  S.stampSoftEraser = function stampSoftEraser(
+    ctx: CanvasRenderingContext2D,
+    brush: any,
+    x: number,
+    y: number,
+    pressure: number,
+  ) {
+    const p = Math.max(0.05, Math.min(1, pressure));
+    const radius = Math.max(2, state.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * p) * 0.5);
+    const strength = Math.max(0.06, Math.min(1, state.alpha * (0.2 + p * 0.8)));
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, `rgba(0,0,0,${strength})`);
+    gradient.addColorStop(Math.max(0.05, brush.hardness || 0.25), `rgba(0,0,0,${strength * 0.82})`);
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.fillStyle = gradient;
+    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    ctx.restore();
+  };
+
+  S.stampProceduralTexture = function stampProceduralTexture(
+    ctx: CanvasRenderingContext2D,
+    brush: any,
+    x: number,
+    y: number,
+    pressure: number,
+    angle = 0,
+  ) {
+    const p = Math.max(0.05, Math.min(1, pressure));
+    const size = Math.max(2, state.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * p));
+    const alpha = Math.max(0.025, Math.min(1,
+      state.alpha * (brush.flow || 1) *
+      (1 - (brush.pressureOpacity || 0) + (brush.pressureOpacity || 0) * p),
+    ));
+    const mode = brush.textureMode;
+    const random = (amount: number) => (Math.random() - 0.5) * amount;
+    const count = Math.max(2, Math.round(2 + p * 7));
+    ctx.save();
+    ctx.globalCompositeOperation = brush.kind === 'erase' ? 'destination-out' : (brush.blend || 'source-over');
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = state.color;
+    ctx.fillStyle = state.color;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    const line = (a: number, length: number, width = Math.max(0.45, size * 0.055), ox = 0, oy = 0) => {
+      const dx = Math.cos(a) * length * 0.5;
+      const dy = Math.sin(a) * length * 0.5;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(x + ox - dx, y + oy - dy);
+      ctx.lineTo(x + ox + dx, y + oy + dy);
+      ctx.stroke();
+    };
+    const dot = (dx: number, dy: number, radius: number) => {
+      ctx.beginPath();
+      ctx.arc(x + dx, y + dy, Math.max(0.35, radius), 0, Math.PI * 2);
+      ctx.fill();
+    };
+
+    if (mode === 'hatching' || mode === 'crosshatching') {
+      const hatchAngle = -Math.PI / 4;
+      for (let i = -1; i <= 1; i++) line(hatchAngle, size * 1.35, undefined, i * size * 0.24, i * size * 0.24);
+      if (mode === 'crosshatching') {
+        for (let i = -1; i <= 1; i++) line(Math.PI / 4, size * 1.35, undefined, i * size * 0.24, -i * size * 0.24);
+      }
+    } else if (mode === 'stippling' || mode === 'concrete' || mode === 'texture-eraser') {
+      for (let i = 0; i < count * (mode === 'concrete' ? 2 : 1); i++) {
+        dot(random(size), random(size), size * (0.025 + Math.random() * (mode === 'concrete' ? 0.055 : 0.09)) * (0.6 + p));
+      }
+      if (mode === 'concrete' && p > 0.45) {
+        line(random(Math.PI), size * 0.7, Math.max(0.35, size * 0.025), random(size * 0.25), random(size * 0.25));
+      }
+    } else if (mode === 'brick') {
+      const w = size * 1.05, h = size * 0.48;
+      ctx.lineWidth = Math.max(0.5, size * 0.045);
+      ctx.strokeRect(x - w / 2, y - h / 2, w, h);
+      ctx.beginPath();
+      ctx.moveTo(x, y - h / 2); ctx.lineTo(x, y);
+      ctx.moveTo(x - w / 2, y); ctx.lineTo(x + w / 2, y);
+      ctx.moveTo(x - w * 0.25, y); ctx.lineTo(x - w * 0.25, y + h / 2);
+      ctx.moveTo(x + w * 0.25, y); ctx.lineTo(x + w * 0.25, y + h / 2);
+      ctx.stroke();
+    } else if (mode === 'tile') {
+      const side = size * 0.78;
+      ctx.lineWidth = Math.max(0.55, size * 0.045);
+      ctx.strokeRect(x - side / 2, y - side / 2, side, side);
+      ctx.strokeRect(x - side * 0.12, y - side * 0.12, side * 0.24, side * 0.24);
+    } else if (mode === 'wood') {
+      ctx.lineWidth = Math.max(0.45, size * 0.04);
+      for (let i = -2; i <= 2; i++) {
+        const oy = i * size * 0.16 + random(size * 0.05);
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.65, y + oy);
+        ctx.bezierCurveTo(x - size * 0.2, y + oy - size * 0.12, x + size * 0.2, y + oy + size * 0.12, x + size * 0.65, y + oy);
+        ctx.stroke();
+      }
+      ctx.beginPath(); ctx.ellipse(x, y, size * 0.12, size * 0.07, angle, 0, Math.PI * 2); ctx.stroke();
+    } else if (mode === 'stone') {
+      ctx.lineWidth = Math.max(0.5, size * 0.045);
+      for (let n = 0; n < Math.max(2, Math.round(count / 2)); n++) {
+        const cx = x + random(size * 0.75), cy = y + random(size * 0.65);
+        const r = size * (0.12 + Math.random() * 0.13);
+        ctx.beginPath();
+        for (let k = 0; k < 6; k++) {
+          const a = (k / 6) * Math.PI * 2;
+          const px = cx + Math.cos(a) * r * (0.75 + Math.random() * 0.35);
+          const py = cy + Math.sin(a) * r * (0.75 + Math.random() * 0.35);
+          if (!k) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+        }
+        ctx.closePath(); ctx.stroke();
+      }
+    } else if (mode === 'grass') {
+      ctx.lineWidth = Math.max(0.45, size * 0.035);
+      for (let i = 0; i < count; i++) {
+        const bx = x + random(size * 0.8), by = y + size * 0.42 + random(size * 0.18);
+        ctx.beginPath(); ctx.moveTo(bx, by);
+        ctx.quadraticCurveTo(bx + random(size * 0.25), by - size * 0.42, bx + random(size * 0.32), by - size * (0.55 + Math.random() * 0.35));
+        ctx.stroke();
+      }
+    } else if (mode === 'leaves') {
+      for (let i = 0; i < count; i++) {
+        ctx.beginPath();
+        ctx.ellipse(x + random(size * 0.8), y + random(size * 0.7), size * 0.13, size * 0.055, random(Math.PI), 0, Math.PI * 2);
+        if (p > 0.6) ctx.fill(); else ctx.stroke();
+      }
+    } else if (mode === 'shrubs') {
+      ctx.lineWidth = Math.max(0.45, size * 0.035);
+      for (let i = 0; i < count; i++) {
+        const r = size * (0.12 + Math.random() * 0.13);
+        ctx.beginPath(); ctx.arc(x + random(size * 0.7), y + random(size * 0.55), r, 0, Math.PI * 2); ctx.stroke();
+      }
+    } else if (mode === 'trees') {
+      ctx.lineWidth = Math.max(0.65, size * 0.045);
+      line(Math.PI / 2, size * 0.82, Math.max(0.8, size * 0.08), 0, size * 0.28);
+      for (let i = 0; i < count; i++) dot(random(size * 0.65), -size * 0.16 + random(size * 0.45), size * (0.11 + Math.random() * 0.1));
+    } else if (mode === 'ground-cover') {
+      ctx.lineWidth = Math.max(0.4, size * 0.035);
+      for (let i = 0; i < count; i++) {
+        const cx = x + random(size), cy = y + random(size * 0.6);
+        ctx.beginPath(); ctx.arc(cx, cy, size * (0.06 + Math.random() * 0.08), Math.PI, Math.PI * 2); ctx.stroke();
+      }
+    } else if (mode === 'colored-pencil') {
+      ctx.lineWidth = Math.max(0.35, size * 0.08);
+      for (let i = 0; i < count; i++) line(angle + random(0.18), size * (0.35 + Math.random() * 0.5), undefined, random(size * 0.35), random(size * 0.35));
+    } else if (mode === 'dry-marker' || mode === 'dry-brush') {
+      ctx.lineCap = 'butt';
+      const strands = mode === 'dry-brush' ? count + 3 : count;
+      for (let i = 0; i < strands; i++) {
+        if (Math.random() > 0.35 + p * 0.55) continue;
+        line(angle, size * (0.35 + Math.random() * 0.75), Math.max(0.5, size * (mode === 'dry-brush' ? 0.035 : 0.075)), random(size * 0.3), random(size * 0.65));
+      }
+    }
+    ctx.restore();
+  };
+
+  S.eraseRecordedStrokeAt = function eraseRecordedStrokeAt(layer: any, x: number, y: number, radius: number) {
+    for (let i = layer.history.length - 1; i >= 0; i--) {
+      const entry = layer.history[i];
+      if (!entry || entry.vector || !entry.before || !entry.after) continue;
+      const lx = Math.round(x - entry.x), ly = Math.round(y - entry.y);
+      if (lx < -radius || ly < -radius || lx >= entry.after.width + radius || ly >= entry.after.height + radius) continue;
+      let hit = false;
+      for (let oy = -radius; oy <= radius && !hit; oy += Math.max(1, Math.round(radius / 4))) {
+        for (let ox = -radius; ox <= radius; ox += Math.max(1, Math.round(radius / 4))) {
+          const px = lx + ox, py = ly + oy;
+          if (px < 0 || py < 0 || px >= entry.after.width || py >= entry.after.height) continue;
+          const idx = (py * entry.after.width + px) * 4;
+          if (entry.after.data[idx + 3] > entry.before.data[idx + 3] + 4) { hit = true; break; }
+        }
+      }
+      if (!hit) continue;
+      const current = layer.ctx.getImageData(entry.x, entry.y, entry.after.width, entry.after.height);
+      layer.ctx.putImageData(entry.before, entry.x, entry.y);
+      const after = layer.ctx.getImageData(entry.x, entry.y, entry.after.width, entry.after.height);
+      S.pushRegionSnapshot(layer, entry.x, entry.y, current, after);
+      S.renderLayers();
+      S.showHint('Stroke erased');
+      return true;
+    }
+    S.showHint('No stroke found');
+    return false;
+  };
+
+  S.eraseRasterObjectAt = function eraseRasterObjectAt(layer: any, x: number, y: number, radius: number) {
+    const image = layer.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
+    const width = image.width, height = image.height, data = image.data;
+    let sx = Math.max(0, Math.min(width - 1, Math.round(x)));
+    let sy = Math.max(0, Math.min(height - 1, Math.round(y)));
+    if (data[(sy * width + sx) * 4 + 3] < 8) {
+      let found = false;
+      for (let r = 1; r <= radius && !found; r++) {
+        for (let oy = -r; oy <= r && !found; oy++) for (let ox = -r; ox <= r; ox++) {
+          const px = sx + ox, py = sy + oy;
+          if (px >= 0 && py >= 0 && px < width && py < height && data[(py * width + px) * 4 + 3] >= 8) {
+            sx = px; sy = py; found = true; break;
+          }
+        }
+      }
+      if (!found) { S.showHint('No object found'); return false; }
+    }
+    const seen = new Uint8Array(width * height);
+    const queue: number[] = [sy * width + sx];
+    seen[queue[0]] = 1;
+    let minX = sx, minY = sy, maxX = sx, maxY = sy;
+    for (let head = 0; head < queue.length; head++) {
+      const pos = queue[head], px = pos % width, py = Math.floor(pos / width);
+      data[pos * 4 + 3] = 0;
+      minX = Math.min(minX, px); minY = Math.min(minY, py); maxX = Math.max(maxX, px); maxY = Math.max(maxY, py);
+      const neighbours = [pos - 1, pos + 1, pos - width, pos + width];
+      for (const next of neighbours) {
+        if (next < 0 || next >= seen.length || seen[next]) continue;
+        const nx = next % width, ny = Math.floor(next / width);
+        if (Math.abs(nx - px) + Math.abs(ny - py) !== 1 || data[next * 4 + 3] < 8) continue;
+        seen[next] = 1; queue.push(next);
+      }
+    }
+    const bx = minX, by = minY, bw = maxX - minX + 1, bh = maxY - minY + 1;
+    const before = layer._cur ? S._extractRegion(layer._cur, bx, by, bw, bh) : layer.ctx.getImageData(bx, by, bw, bh);
+    layer.ctx.putImageData(image, 0, 0);
+    const after = layer.ctx.getImageData(bx, by, bw, bh);
+    S.pushRegionSnapshot(layer, bx, by, before, after);
+    S.renderLayers();
+    S.showHint('Object erased');
+    return true;
+  };
+
   S.activePointers = new Map<any, any>(); // for pinch detection
 
   S.paper.addEventListener('pointerdown', (e: any) => {
@@ -360,6 +592,23 @@ export function initStrokeInput() {
     state.velocity = 0;
     state.strokeAge = 0;
     const l = S.activeLayer();
+    const pointerBrush = S.activeBrush();
+
+    if (S.isDrawTool(state.tool) && pointerBrush?.eraserMode === 'stroke') {
+      state.drawing = false;
+      S.eraseRecordedStrokeAt(l, p.x, p.y, Math.max(3, Math.round(state.size * 0.5)));
+      return;
+    }
+    if (S.isDrawTool(state.tool) && pointerBrush?.eraserMode === 'object') {
+      state.drawing = false;
+      if (typeof S.selectEntityAt === 'function' && S.selectEntityAt(p) && state.sel) {
+        S.deleteSelectedElement();
+        S.showHint('Object erased');
+      } else {
+        S.eraseRasterObjectAt(l, p.x, p.y, Math.max(4, Math.round(state.size * 0.5)));
+      }
+      return;
+    }
 
     if (state.tool === 'ruler') {
       // In chain mode, snap start to previous measurement endpoint
@@ -378,11 +627,11 @@ export function initStrokeInput() {
     // Set up stroke path — NO initial dot drawn here.
     // The first pointermove event draws the actual opening segment with real pressure,
     // so the stroke start matches the brush opacity exactly.
-    const brush = S.activeBrush();
+    const brush = pointerBrush;
 
     // Decide whether to use the full-opacity stroke buffer.
     // Texture brushes and the eraser draw directly to the layer.
-    state.usingBuffer = (brush.kind !== 'erase' && !(brush.tipType === 'texture' && brush.tipImage));
+    state.usingBuffer = (brush.kind !== 'erase' && !S.isProceduralBrush(brush) && !(brush.tipType === 'texture' && brush.tipImage));
     if (state.usingBuffer) {
       // Render the LIVE stroke to a display-resolution buffer (cheap to fill and
       // composite each frame), then replay at full resolution once on lift. This
@@ -417,7 +666,11 @@ export function initStrokeInput() {
 
     const tgt = S.strokeTarget();
     state.strokeBBox = { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y, maxW: state.size };
-    if (brush.tipType === 'texture' && brush.tipImage) {
+    if (brush.id === 'eraser-soft') {
+      S.stampSoftEraser(l.ctx, brush, p.x, p.y, S.pressureFor(e));
+    } else if (S.isProceduralBrush(brush)) {
+      S.stampProceduralTexture(l.ctx, brush, p.x, p.y, S.pressureFor(e), 0);
+    } else if (brush.tipType === 'texture' && brush.tipImage) {
       S.stampTexture(l.ctx, brush, p.x, p.y, S.pressureFor(e));
     } else {
       S.configurePen(tgt, S.pressureFor(e), brush, state.usingBuffer);
@@ -591,7 +844,32 @@ export function initStrokeInput() {
       const taperIn  = Math.min(1, state.strokeAge / 8);   // ramp up over 8 samples
       const taperPr  = pr * taperIn;
 
-      if (brush.tipType === 'texture' && brush.tipImage) {
+      if (brush.id === 'eraser-soft') {
+        const effSize = Math.max(2, state.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * taperPr));
+        S.stampSoftEraser(l.ctx, brush, p.x, p.y, taperPr);
+        const bb = state.strokeBBox;
+        if (bb) {
+          bb.minX = Math.min(bb.minX, p.x); bb.minY = Math.min(bb.minY, p.y);
+          bb.maxX = Math.max(bb.maxX, p.x); bb.maxY = Math.max(bb.maxY, p.y);
+          bb.maxW = Math.max(bb.maxW, effSize);
+        }
+        state.lastX = p.x; state.lastY = p.y;
+      } else if (S.isProceduralBrush(brush)) {
+        const effSize = Math.max(2, state.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * taperPr));
+        const step = Math.max(1, (brush.spacing || 0.2) * effSize);
+        state.stampAccum += segDist;
+        if (state.stampAccum >= step) {
+          S.stampProceduralTexture(l.ctx, brush, p.x, p.y, taperPr, Math.atan2(dy, dx));
+          state.stampAccum %= step;
+        }
+        const bb = state.strokeBBox;
+        if (bb) {
+          bb.minX = Math.min(bb.minX, p.x); bb.minY = Math.min(bb.minY, p.y);
+          bb.maxX = Math.max(bb.maxX, p.x); bb.maxY = Math.max(bb.maxY, p.y);
+          bb.maxW = Math.max(bb.maxW, effSize * 1.5);
+        }
+        state.lastX = p.x; state.lastY = p.y;
+      } else if (brush.tipType === 'texture' && brush.tipImage) {
         const effSize = Math.max(1, brush.size * (1 - brush.pressureSize + brush.pressureSize * taperPr) * velMul * tiltMul);
         const step = Math.max(0.5, brush.spacing * effSize);
         state.stampAccum += segDist;
@@ -806,7 +1084,7 @@ export function initStrokeInput() {
     if (S.isDrawTool(state.tool)) {
       const brush = S.activeBrush();
       const tgt = S.strokeTarget();
-      if (brush.tipType !== 'texture' && !state.usingBuffer) tgt.stroke();   // eraser: finish final segment on the layer
+      if (brush.tipType !== 'texture' && brush.id !== 'eraser-soft' && !state.usingBuffer) tgt.stroke();
       const rect = S._bboxRect(state.strokeBBox);
 
       if (state.usingBuffer) {
@@ -824,7 +1102,8 @@ export function initStrokeInput() {
           }
           const fctx = S.replayCtx;
           fctx.strokeStyle = state.strokeColor || state.color;
-          fctx.lineCap = 'round'; fctx.lineJoin = 'round';
+          fctx.lineCap = brush.tipType === 'chisel' || brush.tipType === 'flat' ? 'square' : 'round';
+          fctx.lineJoin = 'round';
           fctx.globalAlpha = 1;
           fctx.beginPath();
           fctx.moveTo(state.strokeStart.x, state.strokeStart.y);
@@ -930,7 +1209,7 @@ export function initStrokeInput() {
     ctx.globalCompositeOperation = brush.kind === 'erase' ? 'destination-out' : (skipMaster ? 'source-over' : brush.blend);
     ctx.strokeStyle = state.color;
     ctx.fillStyle = state.color;
-    ctx.lineCap = brush.tipType === 'chisel' || brush.tipType === 'flat' ? 'butt' : 'round';
+    ctx.lineCap = brush.tipType === 'chisel' || brush.tipType === 'flat' ? 'square' : 'round';
     ctx.lineJoin = 'round';
 
     let baseSize = state.size;
@@ -944,7 +1223,7 @@ export function initStrokeInput() {
       ctx.globalAlpha = 1;
     } else {
       const alpha = state.alpha * (1 - (brush.pressureOpacity || 0) + (brush.pressureOpacity || 0) * pressure);
-      ctx.globalAlpha = brush.kind === 'erase' ? 1 : Math.min(1, Math.max(0.02, alpha));
+      ctx.globalAlpha = Math.min(1, Math.max(0.02, alpha));
     }
     const hard = brush.hardness == null ? 1 : brush.hardness;
     if (brush.kind !== 'erase' && brush.tipType === 'soft' && hard < 0.92) {

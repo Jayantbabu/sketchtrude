@@ -143,6 +143,7 @@ export function initToolUi() {
     if (brush.id === 'tech-revision') state.color = '#a02835';
     if (typeof S.highlightRailGroups === 'function') S.highlightRailGroups();
     S.updatePreview();
+    if (typeof S.syncToolOptionsBar === 'function') S.syncToolOptionsBar();
   }
 
   // Tool buttons: single tap selects; tapping the ALREADY-active tool again
@@ -179,7 +180,7 @@ export function initToolUi() {
 
   // ===== Grouped rail: collapse the 20-tool strip into category buttons =====
   S.TOOL_GROUPS = [
-    { id: 'draw',     label: 'Draw',           tools: ['pen','marker','pencil','brush','watercolour','eraser'] },
+    { id: 'draw',     label: 'Draw',           tools: ['pen','pencil','marker','brush','texture','eraser'] },
     { id: 'shapes',   label: 'Shapes',         tools: ['line','rect','circle'] },
     { id: 'fillstamp',label: 'Fill / Stamp',   tools: ['fill','stencil'] },
     { id: 'region',   label: 'Region',         tools: ['wand','lasso'] },
@@ -199,6 +200,17 @@ export function initToolUi() {
       const svg = b.querySelector('svg');
       const lbl = (b.querySelector('.label')?.textContent || t).replace(/\s·.*$/, '');
       S._railMeta[t] = { svg: svg ? svg.outerHTML : '', label: lbl };
+    });
+    Object.assign(S._railMeta, {
+      pen: { ...S._railMeta.pen, label: 'Pen' },
+      pencil: { ...S._railMeta.pencil, label: 'Pencil' },
+      marker: { ...S._railMeta.marker, label: 'Marker' },
+      brush: { ...S._railMeta.brush, label: 'Brush' },
+      texture: {
+        label: 'Texture',
+        svg: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19L19 4M8 21L21 8M3 14L14 3"/><path d="M4 8h4v4M12 16h4v4" opacity=".55"/></svg>',
+      },
+      eraser: { ...S._railMeta.eraser, label: 'Eraser' },
     });
     if (!$el('grp-flyout-style')) {
       const st = document.createElement('style'); st.id = 'grp-flyout-style';
@@ -274,7 +286,7 @@ export function initToolUi() {
     g.tools.forEach((t: any) => {
       const it = document.createElement('button'); it.className = 'gfi';
       it.innerHTML = `${S._railMeta[t]?.svg || ''}<span>${S._railMeta[t]?.label || t}</span>`;
-      if (t === state.tool) it.classList.add('on');
+      if (t === state.tool || t === S.brushFamilyOf(state.tool)) it.classList.add('on');
       it.addEventListener('click', (e: any) => {
         e.stopPropagation();
         state.groupLast[g.id] = t;
@@ -962,14 +974,18 @@ export function initToolUi() {
     return out;
   }
 
-  // Reuse the compact rail menu for draw tools; never steal Opening/Build title taps.
+  // The active brush name is the compact preset picker for draw tools.
   $el('puck-name').addEventListener('click', (e: any) => {
     e.stopPropagation();
     const group = S._groupOf ? S._groupOf(state.tool) : null;
     const isDraw = (group && group.id === 'draw') || (typeof S.isDrawTool === 'function' && S.isDrawTool(state.tool));
     if (!isDraw) return;
+    if (document.getElementById('brush-preset-menu')) {
+      S.closeBrushPresetMenu();
+      return;
+    }
     if (S._grpFlyout) S.closeGroupFlyout();
-    else S.openDrawToolMenu();
+    S.openBrushPresetMenu($el('puck-name'));
   });
 
   /* =================== BRUSH EDITOR =================== */
@@ -1154,6 +1170,119 @@ export function initToolUi() {
     state.stencilRotation = parseFloat(e.target.value);
     $el('stencil-rot-val').textContent = Math.round(state.stencilRotation) + '°';
   });
+
+  S.closeBrushSubmenu = function closeBrushSubmenu() {
+    document.getElementById('brush-submenu')?.remove();
+  };
+
+  S.openBrushSubmenu = function openBrushSubmenu(parentId: string, anchor: HTMLElement) {
+    S.closeBrushSubmenu();
+    const ids = S.BRUSH_SUBFAMILIES[parentId] || [];
+    if (!ids.length) return;
+    const menu = document.createElement('div');
+    menu.id = 'brush-submenu';
+    ids.forEach((id: string) => {
+      const brush = S.BUILTIN_BRUSHES.find((item: any) => item.id === id);
+      if (!brush) return;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = state.tool === id ? 'on' : '';
+      button.textContent = brush.name;
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        state.brushLast = state.brushLast || {};
+        state.brushLast.texture = id;
+        S.setTool(id);
+        S.closeBrushSubmenu();
+        S.closeBrushPresetMenu();
+      });
+      menu.appendChild(button);
+    });
+    menu.addEventListener('pointerdown', (event) => event.stopPropagation());
+    document.body.appendChild(menu);
+    const rect = anchor.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const parentMenu = anchor.closest('#brush-preset-menu');
+    if (parentMenu) {
+      menu.style.left = Math.max(8, Math.min(window.innerWidth - menuRect.width - 8, rect.right + 8)) + 'px';
+      menu.style.top = Math.max(8, Math.min(window.innerHeight - menuRect.height - 8, rect.top)) + 'px';
+    } else {
+      menu.style.left = Math.max(8, Math.min(window.innerWidth - menuRect.width - 8, rect.left)) + 'px';
+      menu.style.top = Math.max(8, rect.top - menuRect.height - 8) + 'px';
+    }
+    setTimeout(() => document.addEventListener('pointerdown', S.closeBrushSubmenu, { once: true }), 0);
+  };
+
+  S.closeBrushPresetMenu = function closeBrushPresetMenu() {
+    document.getElementById('brush-preset-menu')?.remove();
+    S.closeBrushSubmenu();
+  };
+
+  S.openBrushPresetMenu = function openBrushPresetMenu(anchor: HTMLElement) {
+    S.closeBrushPresetMenu();
+    const family = S.brushFamilyOf(state.tool);
+    const ids = S.BRUSH_FAMILIES[family] || [];
+    if (!ids.length) return;
+
+    const menu = document.createElement('div');
+    menu.id = 'brush-preset-menu';
+    menu.setAttribute('role', 'menu');
+
+    const title = document.createElement('div');
+    title.className = 'bpm-title';
+    title.textContent = family;
+    menu.appendChild(title);
+
+    ids.forEach((id: string) => {
+      const brush = S.BUILTIN_BRUSHES.find((item: any) => item.id === id);
+      if (!brush) return;
+      const children = S.BRUSH_SUBFAMILIES[id] || [];
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'bpm-item' + ((state.tool === id || children.includes(state.tool)) ? ' on' : '');
+      button.setAttribute('role', 'menuitem');
+      button.title = children.length ? `${brush.name} options` : brush.name;
+
+      const preview = document.createElement('span');
+      preview.className = 'bpm-preview';
+      preview.style.height = Math.max(1, Math.min(8, Number(brush.size) * 0.55)) + 'px';
+      preview.style.opacity = String(Math.max(0.32, Number(brush.opacity) || 1));
+      button.appendChild(preview);
+
+      const label = document.createElement('span');
+      label.className = 'bpm-name';
+      label.textContent = brush.name;
+      button.appendChild(label);
+
+      if (children.length) {
+        const arrow = document.createElement('span');
+        arrow.className = 'bpm-arrow';
+        arrow.textContent = '›';
+        button.appendChild(arrow);
+      }
+
+      button.addEventListener('click', (event: any) => {
+        event.stopPropagation();
+        if (children.length) {
+          S.openBrushSubmenu(id, button);
+          return;
+        }
+        state.brushLast = state.brushLast || {};
+        state.brushLast[family] = id;
+        S.setTool(id);
+        S.closeBrushPresetMenu();
+      });
+      menu.appendChild(button);
+    });
+
+    menu.addEventListener('pointerdown', (event) => event.stopPropagation());
+    document.body.appendChild(menu);
+    const rect = anchor.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(window.innerWidth - menuRect.width - 8, rect.left)) + 'px';
+    menu.style.top = Math.max(8, rect.top - menuRect.height - 10) + 'px';
+    setTimeout(() => document.addEventListener('pointerdown', S.closeBrushPresetMenu, { once: true }), 0);
+  };
 
   /** Bottom-center context options for shapes / wall / measure / region / selection. */
   S.syncToolOptionsBar = function syncToolOptionsBar() {

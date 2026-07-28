@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   BUILTIN_BRUSH_PRESETS,
+  BRUSH_FAMILIES,
+  BRUSH_SUBFAMILIES,
   createBrushLibrary,
   resolveStrokeParams,
   smoothPoint,
@@ -31,6 +33,32 @@ describe("Brush library", () => {
     expect(lib.search("ScalePen").some((b) => b.id.startsWith("scalepen"))).toBe(
       true,
     );
+  });
+
+  it("exposes the six requested tool families and nested texture choices", () => {
+    expect(Object.keys(BRUSH_FAMILIES)).toEqual([
+      "pen",
+      "pencil",
+      "marker",
+      "brush",
+      "texture",
+      "eraser",
+    ]);
+    for (const ids of Object.values(BRUSH_FAMILIES)) expect(ids).toHaveLength(5);
+    expect(BRUSH_SUBFAMILIES["tex-material"]).toEqual([
+      "tex-brick",
+      "tex-concrete",
+      "tex-wood",
+      "tex-stone",
+      "tex-tile",
+    ]);
+    expect(BRUSH_SUBFAMILIES["tex-foliage"]).toEqual([
+      "tex-grass",
+      "tex-leaves",
+      "tex-shrubs",
+      "tex-trees",
+      "tex-ground-cover",
+    ]);
   });
 });
 
@@ -103,6 +131,33 @@ describe("resolveStrokeParams", () => {
     });
     expect(params.composite).toBe("destination-out");
     expect(params.useBuffer).toBe(false);
+  });
+
+  it("gives every visible preset a pressure response", () => {
+    const visibleIds = [
+      ...new Set([
+        ...Object.values(BRUSH_FAMILIES).flat(),
+        ...Object.values(BRUSH_SUBFAMILIES).flat(),
+      ]),
+    ];
+    for (const id of visibleIds) {
+      const brush = BUILTIN_BRUSH_PRESETS.find((item) => item.id === id)!;
+      expect(brush, id).toBeTruthy();
+      const soft = resolveStrokeParams(brush, 0.15, {
+        color: "#000",
+        size: brush.size,
+        alpha: brush.opacity,
+      });
+      const hard = resolveStrokeParams(brush, 1, {
+        color: "#000",
+        size: brush.size,
+        alpha: brush.opacity,
+      });
+      expect(
+        hard.lineWidth !== soft.lineWidth || hard.alpha !== soft.alpha,
+        `${id} should respond to pressure`,
+      ).toBe(true);
+    }
   });
 });
 

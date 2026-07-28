@@ -1,6 +1,7 @@
 import {
   BRUSH_CATEGORY_LABELS,
   BRUSH_FAMILIES,
+  BRUSH_SUBFAMILIES,
   BUILTIN_BRUSH_PRESETS,
   getBuiltinBrush,
 } from "./presets";
@@ -125,6 +126,9 @@ export class BrushLibrary {
   familyOf(id: string): string | null {
     for (const [fam, ids] of Object.entries(BRUSH_FAMILIES)) {
       if (ids.includes(id)) return fam;
+      for (const parentId of ids) {
+        if (BRUSH_SUBFAMILIES[parentId]?.includes(id)) return fam;
+      }
     }
     return null;
   }

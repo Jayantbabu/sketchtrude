@@ -48,7 +48,7 @@ export function resolveStrokeParams(
 
   return {
     lineWidth,
-    alpha: isErase ? 1 : Math.max(0.02, alpha),
+    alpha: Math.max(0.02, alpha),
     flow: brush.flow ?? 1,
     blend: brush.blend,
     composite: isErase ? "destination-out" : brush.blend,
@@ -98,7 +98,7 @@ export function applyBrushToCanvasContext(
   ctx.globalCompositeOperation = params.composite as GlobalCompositeOperation;
   ctx.strokeStyle = color;
   ctx.fillStyle = color;
-  ctx.lineCap = brush.tipType === "chisel" || brush.tipType === "flat" ? "butt" : "round";
+  ctx.lineCap = brush.tipType === "chisel" || brush.tipType === "flat" ? "square" : "round";
   ctx.lineJoin = "round";
   ctx.lineWidth = params.lineWidth;
   if (options.skipMasterAlpha) {
