@@ -214,11 +214,10 @@ export function initRooms() {
   }
 
   S.formatArea = function formatArea(areaPx2: any) {
-    if (state.pxPerUnit && state.scaleUnit) {
-      const u = state.scaleUnit;
-      const unitInMm = { mm:1, cm:10, m:1000, in:25.4, ft:304.8 }[u] || 1;
-      const mmPerPx = unitInMm / state.pxPerUnit;
-      const areaMm2 = areaPx2 * mmPerPx * mmPerPx;   // true physical area, in mm²
+    if (S.hasCalibratedScale()) {
+      const u = state.scaleCalibration.displayUnit;
+      const mmPerDocUnit = Number(state.scaleCalibration.mmPerDocumentUnit);
+      const areaMm2 = areaPx2 * mmPerDocUnit * mmPerDocUnit;
       if (u === 'in' || u === 'ft') {                // imperial family → in² ↔ ft²
         const ft2 = areaMm2 / 92903.04;              // 1 ft² = 304.8² mm²
         if (ft2 >= 1) return `${ft2.toFixed(2)} ft²`;
@@ -231,17 +230,13 @@ export function initRooms() {
       if (cm2 >= 1) return `${cm2.toFixed(1)} cm²`;
       return `${areaMm2.toFixed(0)} mm²`;
     }
-    // No scale set — estimate from canvas px
-    const docPxPerMm = S.doc.wPx / S.doc.wMM;
-    const areaMm2 = areaPx2 / (docPxPerMm * docPxPerMm);
-    return `${(areaMm2 / 100).toFixed(0)} cm² (est.)`;
+    return `${Math.round(areaPx2)} du² (unscaled)`;
   }
 
   S.formatLen = function formatLen(px: any) {
-    if (state.pxPerUnit && state.scaleUnit) {
-      const u = state.scaleUnit;
-      const unitInMm = { mm:1, cm:10, m:1000, in:25.4, ft:304.8 }[u] || 1;
-      const mm = (px / state.pxPerUnit) * unitInMm;   // true physical length, in mm
+    if (S.hasCalibratedScale()) {
+      const u = state.scaleCalibration.displayUnit;
+      const mm = S.docUnitsToMM(px);
       if (u === 'in' || u === 'ft') {                 // imperial → in ↔ ft
         const ft = mm / 304.8;
         if (ft >= 1) return `${ft.toFixed(2)} ft`;
@@ -253,7 +248,7 @@ export function initRooms() {
       if (cm >= 1) return `${cm.toFixed(1)} cm`;
       return `${mm.toFixed(0)} mm`;
     }
-    return `${Math.round(px)} px`;
+    return `${Math.round(px)} du (unscaled)`;
   }
 
   S.ensureSchedulePanel = function ensureSchedulePanel() {
@@ -362,7 +357,12 @@ export function initRooms() {
   }
 
   S.wallThickPx = function wallThickPx(w: any) {
-    return Math.max(2, (w.thickMM / 1000) * S.pxPerMetre());
+    const calibrated = S.mmToDocUnits(w.thickMM || 230);
+    if (calibrated != null) return Math.max(2, calibrated);
+    // Legacy unscaled walls render as a neutral screen-width skeleton until the
+    // project is calibrated; never pretend the paper itself is a 1:1 building.
+    const viewScale = Math.max(0.01, state.zoom * state.baseZoom);
+    return Math.max(2, 6 / viewScale);
   }
 
   S._SVGNS = 'http://www.w3.org/2000/svg';

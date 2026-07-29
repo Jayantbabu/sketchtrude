@@ -178,8 +178,8 @@ export class LayerEngine {
   }
 
   /**
-   * Drawable (raster) layer ids in paint order — bottom of stack first.
-   * Object-host layers like "Layer 1" are excluded; only sketch surfaces ink.
+   * Canvas-backed layer ids in paint order — bottom of stack first.
+   * Reference layers need a raster surface even though they are not drawable.
    */
   getRasterLayerIds(): string[] {
     const ids: string[] = [];
@@ -187,7 +187,12 @@ export class LayerEngine {
       for (const id of layerIds) {
         const layer = this.layers[id];
         if (!layer) continue;
-        if (getLayerCapabilities(layer.layerKind).canDraw) ids.push(id);
+        if (
+          getLayerCapabilities(layer.layerKind).canDraw ||
+          layer.layerKind === "reference"
+        ) {
+          ids.push(id);
+        }
         if (layer.childLayerIds.length) walk(layer.childLayerIds);
       }
     };
@@ -209,6 +214,7 @@ export class LayerEngine {
       name?: string;
       visible?: boolean;
       locked?: boolean;
+      layerKind?: LayerKind;
       opacity?: number;
       blendMode?: string;
       trace?: number;
@@ -241,7 +247,7 @@ export class LayerEngine {
       const id = this.createLayer({
         id: ld.layer_id,
         name: ld.name || `Layer ${i + 1}`,
-        layerKind: "sketch",
+        layerKind: ld.layerKind ?? "sketch",
         floorId,
         visible: ld.visible !== false,
         locked: ld.locked,
@@ -252,7 +258,9 @@ export class LayerEngine {
       if (typeof ld.trace === "number") layer.trace = ld.trace;
       layer.rasterPath = ld.raster_path ?? null;
       engineIds.push(id);
-      if (i === 0) this._sketchLayerId = id;
+      if (!this._sketchLayerId && layer.layerKind === "sketch") {
+        this._sketchLayerId = id;
+      }
     }
 
     if (engineIds.length === 0) {
@@ -267,7 +275,13 @@ export class LayerEngine {
     }
 
     const clamped = Math.max(0, Math.min(activeIndex, engineIds.length - 1));
-    this.setActiveLayer(engineIds[clamped]!);
+    const requestedActive = engineIds[clamped]!;
+    const requestedLayer = this.layers[requestedActive];
+    this.setActiveLayer(
+      requestedLayer && getLayerCapabilities(requestedLayer.layerKind).canDraw
+        ? requestedActive
+        : this._sketchLayerId ?? requestedActive,
+    );
     return engineIds;
   }
 

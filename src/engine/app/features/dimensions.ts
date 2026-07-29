@@ -1,5 +1,6 @@
 /* Feature: dimensions — shared scope S */
 import { S } from "../scope";
+import { calibrationAnnotationMetrics } from "../../../lib/scale-system";
 
 export function initDimensions() {
   const state = S.state;
@@ -40,9 +41,10 @@ export function initDimensions() {
     const settingScale = !!(isPreview && (state.pendingScale || state.pendingScaleStart));
     if (settingScale && ny > 0) { nx = -nx; ny = -ny; }
     const viewScale = Math.max(0.01, (state.zoom || 1) * (state.baseZoom || 1));
-    const extLen = settingScale ? 160 / viewScale : 28;
-    const labelOff = settingScale ? 40 / viewScale : 20;
-    const tickLen = 12;
+    const calibrationMetrics = calibrationAnnotationMetrics(viewScale);
+    const extLen = settingScale ? calibrationMetrics.extensionLength : 28;
+    const labelOff = settingScale ? calibrationMetrics.labelOffset : 20;
+    const tickLen = settingScale ? calibrationMetrics.tickLength : 12;
     if (settingScale) {
       const mx = (m.x1 + m.x2) / 2, my = (m.y1 + m.y2) / 2;
       const offset = extLen + labelOff;
@@ -51,7 +53,7 @@ export function initDimensions() {
       if (area && matrix) {
         const overflow = (side: number) => {
           const p = new DOMPoint(mx + nx * offset * side, my + ny * offset * side).matrixTransform(matrix);
-          const margin = 28;
+          const margin = calibrationMetrics.viewportMargin;
           return Math.max(0, area.left + margin - p.x) +
             Math.max(0, p.x - area.right + margin) +
             Math.max(0, area.top + margin - p.y) +
@@ -60,7 +62,7 @@ export function initDimensions() {
         if (overflow(-1) < overflow(1)) { nx = -nx; ny = -ny; }
       } else {
         const lx = mx + nx * offset, ly = my + ny * offset;
-        const margin = 24 / viewScale;
+        const margin = calibrationMetrics.viewportMargin / viewScale;
         if (lx < margin || lx > S.doc.wPx - margin || ly < margin || ly > S.doc.hPx - margin) {
           nx = -nx; ny = -ny;
         }
@@ -72,7 +74,11 @@ export function initDimensions() {
       const el = document.createElementNS(svgns, 'line');
       el.setAttribute('x1', String(x + nx * extLen)); el.setAttribute('y1', String(y + ny * extLen));
       el.setAttribute('x2', String(x - nx * 6));      el.setAttribute('y2', String(y - ny * 6));
-      el.setAttribute('stroke', color); el.setAttribute('stroke-width', '1.5');
+      el.setAttribute(
+        'stroke-width',
+        String(settingScale ? calibrationMetrics.extensionStrokeWidth : 1.5),
+      );
+      el.setAttribute('stroke', color);
       el.setAttribute('pointer-events', 'none');
       S.rulerOverlay.appendChild(el);
     });
@@ -81,7 +87,11 @@ export function initDimensions() {
     const dline = document.createElementNS(svgns, 'line');
     dline.setAttribute('x1', String(m.x1 + nx * extLen)); dline.setAttribute('y1', String(m.y1 + ny * extLen));
     dline.setAttribute('x2', String(m.x2 + nx * extLen)); dline.setAttribute('y2', String(m.y2 + ny * extLen));
-    dline.setAttribute('stroke', color); dline.setAttribute('stroke-width', '2');
+    dline.setAttribute('stroke', color);
+    dline.setAttribute(
+      'stroke-width',
+      String(settingScale ? calibrationMetrics.dimensionStrokeWidth : 2),
+    );
     dline.setAttribute('pointer-events', 'none');
     S.rulerOverlay.appendChild(dline);
 
@@ -94,7 +104,11 @@ export function initDimensions() {
       tick.setAttribute('y1', String(ty - uy * tickLen - ny * tickLen/2));
       tick.setAttribute('x2', String(tx + ux * tickLen + nx * tickLen/2));
       tick.setAttribute('y2', String(ty + uy * tickLen + ny * tickLen/2));
-      tick.setAttribute('stroke', color); tick.setAttribute('stroke-width', '2.5');
+      tick.setAttribute('stroke', color);
+      tick.setAttribute(
+        'stroke-width',
+        String(settingScale ? calibrationMetrics.tickStrokeWidth : 2.5),
+      );
       tick.setAttribute('pointer-events', 'none');
       S.rulerOverlay.appendChild(tick);
     });
@@ -102,7 +116,11 @@ export function initDimensions() {
     // Endpoint dots — non-interactive
     [[m.x1,m.y1],[m.x2,m.y2]].forEach(([x,y]) => {
       const c = document.createElementNS(svgns, 'circle');
-      c.setAttribute('cx', String(x)); c.setAttribute('cy', String(y)); c.setAttribute('r', '7');
+      c.setAttribute('cx', String(x)); c.setAttribute('cy', String(y));
+      c.setAttribute(
+        'r',
+        String(settingScale ? calibrationMetrics.endpointRadius : 7),
+      );
       c.setAttribute('fill', color);
       c.setAttribute('pointer-events', 'none');
       S.rulerOverlay.appendChild(c);
@@ -115,15 +133,27 @@ export function initDimensions() {
     const ly = (m.y1 + m.y2) / 2 + ny * (extLen + labelOff);
     const angle = Math.atan2(dy, dx) * 180 / Math.PI;
     const readableAngle = (angle > 90 || angle < -90) ? angle + 180 : angle;
-    const pW = text.length * 15 + (isPreview ? 20 : 60);
+    const pW = settingScale
+      ? Math.max(
+          calibrationMetrics.minimumPanelWidth,
+          text.length * calibrationMetrics.estimatedCharacterWidth +
+            calibrationMetrics.panelHorizontalPadding,
+        )
+      : text.length * 15 + (isPreview ? 20 : 60);
 
     const g = document.createElementNS(svgns, 'g');
     g.setAttribute('transform', `rotate(${readableAngle} ${lx} ${ly})`);
 
     const bg = document.createElementNS(svgns, 'rect');
-    bg.setAttribute('x', String(lx - pW/2)); bg.setAttribute('y', String(ly - 18));
-    bg.setAttribute('width', String(pW)); bg.setAttribute('height', String(34));
-    bg.setAttribute('rx', String(5));
+    const panelHeight = settingScale ? calibrationMetrics.panelHeight : 34;
+    bg.setAttribute('x', String(lx - pW/2));
+    bg.setAttribute('y', String(ly - panelHeight / 2));
+    bg.setAttribute('width', String(pW));
+    bg.setAttribute('height', String(panelHeight));
+    bg.setAttribute(
+      'rx',
+      String(settingScale ? calibrationMetrics.panelRadius : 5),
+    );
     bg.setAttribute('fill', isPreview ? '#a02835' : '#1d4ed8');
     bg.setAttribute('pointer-events', isPreview ? 'none' : 'auto');
     if (!isPreview && typeof mIndex === 'number') bg.dataset.measureIdx = String(mIndex);
@@ -134,12 +164,19 @@ export function initDimensions() {
     g.appendChild(bg);
 
     const lbl = document.createElementNS(svgns, 'text');
-    lbl.setAttribute('x', String(lx - (isPreview ? 0 : 14))); lbl.setAttribute('y', String(ly + 6));
+    lbl.setAttribute('x', String(lx - (isPreview ? 0 : 14)));
+    lbl.setAttribute(
+      'y',
+      String(ly + (settingScale ? calibrationMetrics.labelBaselineOffset : 6)),
+    );
     lbl.setAttribute('text-anchor', 'middle');
     lbl.setAttribute('fill', 'white');
     lbl.setAttribute('font-family', 'JetBrains Mono,monospace');
     lbl.setAttribute('font-weight', '600');
-    lbl.setAttribute('font-size', '19');
+    lbl.setAttribute(
+      'font-size',
+      String(settingScale ? calibrationMetrics.fontSize : 19),
+    );
     lbl.setAttribute('pointer-events', 'none');
     lbl.textContent = text;
     g.appendChild(lbl);

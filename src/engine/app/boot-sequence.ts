@@ -67,8 +67,10 @@ export function initBootSequence() {
     S.syncWheelFromColor(state.color);
     S.injectHatchTab();
     const _gc = $el('guide-canvas');
-    if (_gc) { _gc.width = S.doc.wPx; _gc.height = S.doc.hPx; }
-    (S.gridCanvas as any).width = S.doc.wPx; (S.gridCanvas as any).height = S.doc.hPx;
+    if (_gc) {
+      _gc.width = state.guideType && state.guideType !== 'none' ? S.doc.wPx : 1;
+      _gc.height = state.guideType && state.guideType !== 'none' ? S.doc.hPx : 1;
+    }
     S.drawDocGrid();
     if (state.guideType && state.guideType !== 'none' && typeof S.drawGuideGrid === 'function') S.drawGuideGrid();
 

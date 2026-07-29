@@ -84,6 +84,33 @@ describe("LayerEngine", () => {
     expect(engine.getActiveLayerId()).toBe(ids[1]);
   });
 
+  it("rebuilds a locked reference surface below the active sketch layer", () => {
+    const engine = createLayerEngine();
+    const ids = engine.rebuildFromLegacyLayers(
+      [
+        {
+          layer_id: "source-layer",
+          name: "PDF - Site plan",
+          layerKind: "reference",
+          locked: true,
+        },
+        {
+          layer_id: "sketch-layer",
+          name: "Sketch",
+          layerKind: "sketch",
+        },
+      ],
+      1,
+    );
+
+    expect(engine.getRasterLayerIds()).toEqual(ids);
+    expect(engine.getLayer(ids[0]!)?.layerKind).toBe("reference");
+    expect(engine.getLayer(ids[0]!)?.locked).toBe(true);
+    expect(engine.getLayerCapabilities(ids[0]!)?.canDraw).toBe(false);
+    expect(engine.getActiveLayerId()).toBe(ids[1]);
+    expect(engine.getSketchLayerId()).toBe(ids[1]);
+  });
+
   it("projects Layer 1 elements without a floor row by default", () => {
     const engine = createLayerEngine();
     engine.bootstrap();

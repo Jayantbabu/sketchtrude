@@ -5,6 +5,7 @@ import { S } from "./scope";
 import { initDom } from "./dom";
 import { initCores } from "./cores";
 import { initState } from "./state-init";
+import { initScaleSystem } from "./scale";
 import { initViewport } from "./viewport";
 import { initLayers } from "./layers";
 import { initStrokeInput } from "./stroke-input";
@@ -22,6 +23,7 @@ export function boot() {
   initCores();
 
   initState();
+  initScaleSystem();
   initViewport();
   initLayers();
   initStrokeInput();

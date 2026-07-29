@@ -18,12 +18,21 @@ const watch = process.argv.includes("--watch");
 
 /** @type {import('esbuild').BuildOptions} */
 const options = {
+  absWorkingDir: root,
   entryPoints: [entry],
   bundle: true,
   outfile,
   format: "iife",
   platform: "browser",
   target: ["es2018"],
+  // Keep esbuild from walking above the repository looking for tsconfig files.
+  // That also makes isolated/worktree builds deterministic.
+  tsconfigRaw: {
+    compilerOptions: {
+      target: "ES2018",
+      useDefineForClassFields: true,
+    },
+  },
   sourcemap: true,
   logLevel: "info",
   // Resolve @/ paths like tsconfig

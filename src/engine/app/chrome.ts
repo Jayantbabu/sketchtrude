@@ -225,11 +225,16 @@ export function initChrome() {
   }
 
   S.drawDocGrid = function drawDocGrid() {
-    (S.gridCanvas as any).width = S.doc.wPx;
-    (S.gridCanvas as any).height = S.doc.hPx;
     const show = state.showGrid && state.gridType !== 'off';
     (S.gridCanvas as any).style.display = show ? 'block' : 'none';
-    if (!show) return;
+    if (!show) {
+      // A hidden document-sized canvas still allocates its full backing store.
+      (S.gridCanvas as any).width = 1;
+      (S.gridCanvas as any).height = 1;
+      return;
+    }
+    (S.gridCanvas as any).width = S.doc.wPx;
+    (S.gridCanvas as any).height = S.doc.hPx;
 
     const ctx: any = S.gridCtx;
     ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
@@ -424,26 +429,130 @@ export function initChrome() {
   });
 
   $el('btn-export').addEventListener('click', async () => {
+    const requested = window.prompt(
+      `Export DPI (${S.doc.dpi} keeps the working resolution)`,
+      String(S.doc.dpi),
+    );
+    if (requested == null) return;
+    const exportDpi = Math.max(36, Math.min(1200, Number(requested) || S.doc.dpi));
+    let exportScale = exportDpi / S.doc.dpi;
+    exportScale = Math.min(
+      exportScale,
+      16384 / Math.max(S.doc.wPx, S.doc.hPx),
+      Math.sqrt((64 * 1024 * 1024) / Math.max(1, S.doc.wPx * S.doc.hPx)),
+    );
     const out = document.createElement('canvas');
-    out.width = S.doc.wPx; out.height = S.doc.hPx;
+    out.width = Math.max(1, Math.round(S.doc.wPx * exportScale));
+    out.height = Math.max(1, Math.round(S.doc.hPx * exportScale));
     const octx = out.getContext('2d') as any;
     octx.fillStyle = '#ffffff';
-    octx.fillRect(0, 0, S.doc.wPx, S.doc.hPx);
-    state.layers.forEach((l: any) => {
-      if (!l.visible) return;
+    octx.fillRect(0, 0, out.width, out.height);
+    for (const l of state.layers) {
+      if (!l.visible) continue;
+      octx.globalAlpha = l.opacity;
+      if (l.pdfPage && l.pdf && l.imageTransform) {
+        const t = l.imageTransform;
+        const pageScale = (t.w * exportScale) / Math.max(1, l.pdf.pageWidth);
+        const viewport = l.pdfPage.getViewport({ scale: pageScale });
+        const pdfCanvas = document.createElement('canvas');
+        pdfCanvas.width = Math.max(1, Math.ceil(viewport.width));
+        pdfCanvas.height = Math.max(1, Math.ceil(viewport.height));
+        const pdfContext = pdfCanvas.getContext('2d') as CanvasRenderingContext2D;
+        await l.pdfPage.render({
+          canvas: pdfCanvas,
+          canvasContext: pdfContext,
+          viewport,
+        } as any).promise;
+        octx.save();
+        octx.translate(t.x * exportScale, t.y * exportScale);
+        octx.rotate((t.rotation || 0) * Math.PI / 180);
+        octx.drawImage(
+          pdfCanvas,
+          -(t.w * exportScale) / 2,
+          -(t.h * exportScale) / 2,
+          t.w * exportScale,
+          t.h * exportScale,
+        );
+        octx.restore();
+      } else if (l.image && !l.imageBaked && l.imageTransform) {
+        const t = l.imageTransform;
+        octx.save();
+        octx.translate(t.x * exportScale, t.y * exportScale);
+        octx.rotate((t.rotation || 0) * Math.PI / 180);
+        octx.drawImage(
+          l.image,
+          -(t.w * exportScale) / 2,
+          -(t.h * exportScale) / 2,
+          t.w * exportScale,
+          t.h * exportScale,
+        );
+        octx.restore();
+      }
+      if (l.tileStore) await l.tileStore.drawAllTo(octx, exportScale);
+      if (l.strokeStore?.all) {
+        octx.save();
+        octx.scale(exportScale, exportScale);
+        for (const stroke of l.strokeStore.all()) {
+          if (stroke.stamps?.length) {
+            for (const stamp of stroke.stamps) {
+              const gradient = octx.createRadialGradient(
+                stamp.x,
+                stamp.y,
+                0,
+                stamp.x,
+                stamp.y,
+                stamp.radius,
+              );
+              gradient.addColorStop(0, `rgba(0,0,0,${stamp.strength})`);
+              gradient.addColorStop(
+                Math.max(0.05, stamp.hardness),
+                `rgba(0,0,0,${stamp.strength * 0.82})`,
+              );
+              gradient.addColorStop(1, 'rgba(0,0,0,0)');
+              octx.save();
+              octx.globalCompositeOperation = 'destination-out';
+              octx.fillStyle = gradient;
+              octx.fillRect(
+                stamp.x - stamp.radius,
+                stamp.y - stamp.radius,
+                stamp.radius * 2,
+                stamp.radius * 2,
+              );
+              octx.restore();
+            }
+            continue;
+          }
+          octx.strokeStyle = stroke.color;
+          octx.globalAlpha = (l.opacity ?? 1) * (stroke.opacity ?? 1);
+          octx.globalCompositeOperation = stroke.blendMode || 'source-over';
+          octx.lineCap = 'round';
+          octx.lineJoin = 'round';
+          octx.beginPath();
+          octx.moveTo(stroke.start.x, stroke.start.y);
+          for (const segment of stroke.segments) {
+            octx.lineWidth = segment.width;
+            octx.quadraticCurveTo(segment.cx, segment.cy, segment.mx, segment.my);
+            octx.stroke();
+            octx.beginPath();
+            octx.moveTo(segment.mx, segment.my);
+          }
+        }
+        octx.restore();
+      } else {
       if (l.imageCanvas && !l.imageBaked) {
         octx.globalAlpha = l.opacity;
-        octx.drawImage(l.imageCanvas, 0, 0);
+        octx.drawImage(l.imageCanvas, 0, 0, out.width, out.height);
       }
       octx.globalAlpha = l.opacity;
-      octx.drawImage(l.canvas, 0, 0);
-    });
+      octx.drawImage(l.canvas, 0, 0, out.width, out.height);
+      }
+    }
     octx.globalAlpha = 1;
 
     // SketchTrude wordmark + date/time stamp — bottom left
     try {
-      const margin = Math.round(S.doc.wPx * 0.018);
-      const fs = Math.max(11, Math.round(S.doc.wPx * 0.0072));
+      const margin = Math.round(out.width * 0.018);
+      const fs = Math.max(11, Math.round(out.width * 0.0072));
       const now = new Date();
       const pad = (n: any) => String(n).padStart(2, '0');
       const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
@@ -455,7 +564,7 @@ export function initChrome() {
       octx.textAlign = 'left';
       octx.textBaseline = 'alphabetic';
       octx.fillStyle = 'rgba(10,10,10,0.62)';
-      octx.fillText(stampText, margin, S.doc.hPx - margin);
+      octx.fillText(stampText, margin, out.height - margin);
       octx.restore();
     } catch(e) { /* continue without stamp */ }
 
@@ -486,7 +595,7 @@ export function initChrome() {
       S.updateZoomDisplay();
       return;
     }
-    state.zoom = ((window as any).StudioHelpers ? (window as any).StudioHelpers.zoomIn(state.zoom) : Math.min(8, state.zoom * 1.25));
+    state.zoom = ((window as any).StudioHelpers ? (window as any).StudioHelpers.zoomIn(state.zoom) : Math.min(64, state.zoom * 1.25));
     S.applyStageTransform();
   }
 

@@ -19,6 +19,7 @@ describe("createEmptyProjectDocument", () => {
     expect(doc.projectId).toBe("proj-1");
     expect(doc.metadata.name).toBe("Demo");
     expect(doc.canvas.scale).toBeNull();
+    expect(doc.settings.scaleCalibration?.status).toBe("unset");
     expect(doc.scene.rootLayerIds.length).toBe(1);
     expect(doc.extensions?.legacyStudio).toBeTruthy();
     const legacy = doc.extensions!.legacyStudio as LegacyStudioDocument;
@@ -67,6 +68,8 @@ describe("legacy roundtrip", () => {
     expect(doc.canvas.background.value).toBe("#fff8e1");
     expect(doc.settings.grid.show).toBe(true);
     expect(doc.settings.scaleLabel).toBe("1:100");
+    expect(doc.settings.scaleCalibration?.status).toBe("calibrated");
+    expect(doc.settings.scaleCalibration?.mmPerDocumentUnit).toBe(0.8);
     expect(doc.scene.rootLayerIds).toEqual(["stable-ink-layer"]);
     expect(doc.scene.layers["stable-ink-layer"]?.rasterPath).toBe(
       "user/proj/layers/0.png",
@@ -87,6 +90,53 @@ describe("legacy roundtrip", () => {
     expect(back.doc.wmm).toBe(420);
     expect(back.infiniteCanvas).toBe(true);
     expect(back.scaleLabel).toBe("1:100");
+    expect(back.scaleCalibration?.mmPerDocumentUnit).toBe(0.8);
+  });
+});
+
+describe("reference layer roundtrip", () => {
+  it("preserves reference-layer kind, lock, visibility, and source identity", () => {
+    const legacy: LegacyStudioDocument = {
+      version: 1,
+      savedAt: 1_700_000_000_000,
+      doc: { wmm: 210, hmm: 297, dpi: 150 },
+      activeLayer: 1,
+      layers: [
+        {
+          layer_id: "reference-layer",
+          name: "PDF - Site plan",
+          visible: false,
+          opacity: 1,
+          trace: 0,
+          blendMode: "source-over",
+          locked: true,
+          layerKind: "reference",
+          canvasSourceId: "source-123",
+        },
+        {
+          layer_id: "sketch-layer",
+          name: "Sketch",
+          visible: true,
+          opacity: 1,
+          trace: 0,
+          blendMode: "source-over",
+          locked: false,
+          layerKind: "sketch",
+        },
+      ],
+    };
+
+    const doc = projectDocumentFromLegacyStudio("proj-ref", legacy);
+    const reference = doc.scene.layers["reference-layer"];
+    expect(reference?.kind).toBe("reference");
+    expect(reference?.locked).toBe(true);
+    expect(reference?.visible).toBe(false);
+
+    const back = legacyStudioFromProjectDocument(doc);
+    expect(back.layers[0]?.layerKind).toBe("reference");
+    expect(back.layers[0]?.locked).toBe(true);
+    expect(back.layers[0]?.visible).toBe(false);
+    expect(back.layers[0]?.canvasSourceId).toBe("source-123");
   });
 });
 

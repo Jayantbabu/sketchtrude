@@ -89,7 +89,18 @@ function studioToSavedLayers(
       existingLayer?.raster_path ??
       null;
 
-    if (!raster_path) {
+    const rendering =
+      meta?.rendering?.architecture === "hybrid-v1"
+        ? meta.rendering
+        : existingLayer?.rendering ?? null;
+    if (
+      !raster_path &&
+      !rendering &&
+      !meta?.pdf &&
+      !existingLayer?.pdf &&
+      !meta?.imageReference &&
+      !existingLayer?.imageReference
+    ) {
       throw new Error(`Missing raster for layer ${i}`);
     }
 
@@ -102,6 +113,12 @@ function studioToSavedLayers(
       blendMode: meta?.blendMode || "source-over",
       raster_path,
       pdf: meta?.pdf ?? existingLayer?.pdf ?? null,
+      imageReference:
+        meta?.imageReference ?? existingLayer?.imageReference ?? null,
+      rendering,
+      locked: meta?.locked === true,
+      layerKind: meta?.layerKind,
+      canvasSourceId: meta?.canvasSourceId ?? null,
     });
   }
 
@@ -121,6 +138,7 @@ function buildStudioDocument(
     paperBg: manifest.paperBg,
     grid: manifest.grid,
     activeLayer: manifest.activeLayer,
+    scaleCalibration: manifest.scaleCalibration,
     pxPerUnit: manifest.pxPerUnit,
     scaleUnit: manifest.scaleUnit,
     scaleLabel: manifest.scaleLabel ?? null,

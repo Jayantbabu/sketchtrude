@@ -284,6 +284,9 @@ export function initPersistence() {
       // Only re-encode layers that actually changed since the last save.
       const layerData = [];
       for (const l of state.layers) {
+        const engineLayer = l.engineId && S.layerEngine
+          ? S.layerEngine.getLayer(l.engineId)
+          : null;
         if (l.pdf && !l.pdf.storagePath && l.pdfBlob && typeof S.uploadPdfAsset === 'function') {
           try {
             const asset = await S.uploadPdfAsset(l.pdfBlob);
@@ -293,7 +296,37 @@ export function initPersistence() {
             }
           } catch (_) { /* remain local and retry on the next save */ }
         }
-        if (l._dirty || !l._savedBlob) {
+        if (
+          l.imageReference &&
+          !l.imageReference.storagePath &&
+          l.imageBlob &&
+          typeof S.uploadImageAsset === 'function'
+        ) {
+          try {
+            const asset = await S.uploadImageAsset(l.imageBlob);
+            if (asset) {
+              l.imageReference.storagePath = asset.storagePath;
+              l.imageUrl = asset.signedUrl;
+            }
+          } catch (_) { /* remain local and retry on the next save */ }
+        }
+        let hybridRendering = null;
+        if (l.tileStore) {
+          const tiles = await l.tileStore.persistedTiles(false);
+          hybridRendering = {
+            architecture: 'hybrid-v1',
+            tileSize: l.tileStore.tileSize,
+            strokes: l.strokeStore?.serialize?.() || null,
+            tiles,
+          };
+          l._savedBlob = null;
+          l._rasterPath = null;
+          if (S._autosaveSerial === saveSerial) l._dirty = false;
+        } else if (l.imageReference) {
+          l._savedBlob = null;
+          l._rasterPath = null;
+          if (S._autosaveSerial === saveSerial) l._dirty = false;
+        } else if (l._dirty || !l._savedBlob) {
           // Skip the temp-composite when the layer has no live (un-baked) image —
           // encode the drawing canvas directly. Most layers take this fast path.
           let sourceCanvas = l.canvas;
@@ -314,8 +347,12 @@ export function initPersistence() {
         layerData.push({
           layer_id: l.engineId,
           name: l.name, visible: l.visible, opacity: l.opacity,
+          locked: engineLayer?.locked ?? l.locked ?? false,
+          layerKind: engineLayer?.layerKind ?? 'sketch',
+          canvasSourceId: l.canvasSourceId || null,
           trace: l.trace, blendMode: l.blendMode,
           blob: l._savedBlob, raster_path: l._rasterPath || null,
+          rendering: hybridRendering,
           pdf: l.pdf ? {
             ...l.pdf,
             transform: { ...l.imageTransform },
@@ -323,6 +360,12 @@ export function initPersistence() {
             rasterMode: 'drawing-only',
           } : null,
           pdfBlob: l.pdfBlob || null,
+          imageReference: l.imageReference ? {
+            ...l.imageReference,
+            transform: { ...l.imageTransform },
+            opacity: l.imageOpacity ?? 1,
+          } : null,
+          imageBlob: l.imageBlob || null,
         });
       }
       const payload = {
@@ -333,6 +376,7 @@ export function initPersistence() {
         paperBg: state.paperBg,
         grid: { show: state.showGrid, type: state.gridType, spacingMM: state.gridSpacingMM },
         activeLayer: state.activeLayer,
+        scaleCalibration: S.serializeScaleCalibration(),
         pxPerUnit: state.pxPerUnit, scaleUnit: state.scaleUnit,
         scaleLabel: S.scaleLabelFromState(),
         measurements: S.cloneForSave(state.measurements || [], []),
@@ -442,6 +486,7 @@ export function initPersistence() {
         paperBg: payload.paperBg,
         grid: payload.grid,
         activeLayer: payload.activeLayer,
+        scaleCalibration: payload.scaleCalibration,
         pxPerUnit: payload.pxPerUnit,
         scaleUnit: payload.scaleUnit,
         scaleLabel: payload.scaleLabel,
@@ -620,7 +665,12 @@ export function initPersistence() {
         if (Array.isArray(local.masses)) merged.masses = local.masses;
         if (Array.isArray(local.measurements)) merged.measurements = local.measurements;
         if (local.massBaseAnchor) merged.massBaseAnchor = local.massBaseAnchor;
-        if (local.pxPerUnit) {
+        if (local.scaleCalibration) {
+          merged.scaleCalibration = local.scaleCalibration;
+          merged.pxPerUnit = local.pxPerUnit;
+          merged.scaleUnit = local.scaleUnit;
+          merged.scaleLabel = local.scaleLabel;
+        } else if (local.pxPerUnit) {
           merged.pxPerUnit = local.pxPerUnit;
           merged.scaleUnit = local.scaleUnit;
           merged.scaleLabel = local.scaleLabel;
@@ -729,9 +779,12 @@ export function initPersistence() {
     S.doc.wMM = wmm; S.doc.hMM = hmm; S.doc.dpi = dpi;
     S.doc.wPx = Math.round(S.doc.wMM / 25.4 * S.doc.dpi);
     S.doc.hPx = Math.round(S.doc.hMM / 25.4 * S.doc.dpi);
-    S.strokeCanvas.width = S.doc.wPx; S.strokeCanvas.height = S.doc.hPx;
-    const gc = $el('guide-canvas'); if (gc) { gc.width = S.doc.wPx; gc.height = S.doc.hPx; }
-    (S.gridCanvas as any).width = S.doc.wPx; (S.gridCanvas as any).height = S.doc.hPx;
+    S.strokeCanvas.width = 1; S.strokeCanvas.height = 1;
+    const gc = $el('guide-canvas');
+    if (gc) {
+      gc.width = state.guideType && state.guideType !== 'none' ? S.doc.wPx : 1;
+      gc.height = state.guideType && state.guideType !== 'none' ? S.doc.hPx : 1;
+    }
     if (S.paper) {
       S.paper.style.width = S.doc.wPx + 'px';
       S.paper.style.height = S.doc.hPx + 'px';
@@ -754,10 +807,31 @@ export function initPersistence() {
         ? S.allocateLayerSurface(engineId, ld.name || `Layer ${i + 1}`)
         : S.createLayer(ld.name);
       layer.visible = ld.visible !== false;
+      layer.locked = ld.locked === true;
       layer.opacity = typeof ld.opacity === 'number' ? ld.opacity : 1;
+      layer.canvasSourceId = ld.canvasSourceId || null;
       layer.trace = ld.trace || 0;
       layer.blendMode = ld.blendMode || 'source-over';
       if (ld.raster_path) layer._rasterPath = ld.raster_path;
+      if (ld.rendering?.architecture === 'hybrid-v1' && layer.tileStore) {
+        if (ld.rendering.strokes && layer.strokeStore?.constructor?.fromSnapshot) {
+          layer.strokeStore = layer.strokeStore.constructor.fromSnapshot(
+            ld.rendering.strokes,
+          );
+          for (const stroke of layer.strokeStore.all()) {
+            S.renderRecordedStroke?.(layer, stroke);
+          }
+        }
+        for (const tile of ld.rendering.tiles || []) {
+          const source = tile.blob instanceof Blob ? tile.blob : tile.url;
+          if (!source) continue;
+          try {
+            await layer.tileStore.importTile(tile, source);
+          } catch (error) {
+            console.warn('Layer tile restore failed', tile.key, error);
+          }
+        }
+      }
       if (ld.pdf) {
         layer.pdf = { ...ld.pdf, transform: { ...ld.pdf.transform } };
         layer.pdfBlob = ld.pdfBlob instanceof Blob ? ld.pdfBlob : null;
@@ -768,10 +842,25 @@ export function initPersistence() {
         layer.image = new Image();
         layer.image.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
       }
+      if (ld.imageReference) {
+        layer.imageReference = {
+          ...ld.imageReference,
+          transform: { ...ld.imageReference.transform },
+        };
+        layer.imageBlob = ld.imageBlob instanceof Blob ? ld.imageBlob : null;
+        layer.imageUrl = ld.image_url || ld.imageUrl || null;
+        layer.imageTransform = { ...ld.imageReference.transform };
+        layer.imageOpacity =
+          typeof ld.imageReference.opacity === 'number'
+            ? ld.imageReference.opacity
+            : 1;
+        layer.imageBaked = false;
+      }
       if (S.layerEngine && engineId) {
         const meta = S.layerEngine.getLayer(engineId);
         if (meta) {
           meta.visible = layer.visible;
+          meta.locked = layer.locked;
           meta.opacity = layer.opacity;
           meta.trace = layer.trace;
           meta.blendMode = layer.blendMode;
@@ -788,7 +877,21 @@ export function initPersistence() {
           console.warn('PDF source restore failed; using raster fallback', error);
         }
       }
-      if (blob) {
+      if (
+        layer.imageReference &&
+        (layer.imageBlob || layer.imageUrl) &&
+        typeof S.loadImageReferenceRuntime === 'function'
+      ) {
+        try {
+          await S.loadImageReferenceRuntime(
+            layer,
+            layer.imageBlob || layer.imageUrl,
+          );
+        } catch (error) {
+          console.warn('Image reference restore failed', error);
+        }
+      }
+      if (blob && !ld.rendering) {
         try {
           if (!duplicatePdfRasterIndexes.has(i) && shouldPaintPersistedLayerRaster(
             Boolean(layer.pdf),
@@ -796,7 +899,14 @@ export function initPersistence() {
             ld.pdf?.rasterMode,
           )) {
             const bmp = await createImageBitmap(blob);
-            layer.ctx.drawImage(bmp, 0, 0);
+            if (layer.tileStore) {
+              layer.tileStore.forEachContext(
+                { x: 0, y: 0, w: S.doc.wPx, h: S.doc.hPx },
+                (ctx: CanvasRenderingContext2D) => ctx.drawImage(bmp, 0, 0),
+              );
+            } else {
+              layer.ctx.drawImage(bmp, 0, 0);
+            }
             bmp.close && bmp.close();
           }
           layer._savedBlob = duplicatePdfRasterIndexes.has(i) ? null : blob;
@@ -824,14 +934,19 @@ export function initPersistence() {
     if (S.layerEngine && state.layers[state.activeLayer]?.engineId) {
       S.layerEngine.setActiveLayer(state.layers[state.activeLayer].engineId);
     }
-    if (saved.pxPerUnit) {
-      state.pxPerUnit = saved.pxPerUnit;
-      state.scaleUnit = saved.scaleUnit || 'cm';
+    if (saved.scaleCalibration) {
+      S.setScaleCalibration(
+        saved.scaleCalibration,
+        saved.pxPerUnit,
+        saved.scaleUnit,
+      );
+    } else if (saved.pxPerUnit) {
+      S.setScaleCalibration(null, saved.pxPerUnit, saved.scaleUnit || 'cm');
     } else if (saved.scaleLabel) {
-      state.pxPerUnit = null;
+      S.clearScaleCalibration();
       S.applyScaleFromLabel(saved.scaleLabel);
     } else {
-      state.pxPerUnit = null;
+      S.clearScaleCalibration();
     }
     S.updateScaleDisplay();
     if (saved.infiniteCanvas != null) state.infiniteCanvas = !!saved.infiniteCanvas;
@@ -874,7 +989,7 @@ export function initPersistence() {
   S._scaleSyncTimer = null;
   S.syncProjectScale = function syncProjectScale(label: any) {
     const pid = typeof window !== 'undefined' ? (window as any).__SKETCHTRUDE_PROJECT_ID : null;
-    if (!pid || pid === 'local' || !label) return;
+    if (!pid || pid === 'local') return;
     const cfg = (window as any).__SKETCHTRUDE_PROJECT_CONFIG;
     if (cfg) cfg.scale_label = label;
     clearTimeout(S._scaleSyncTimer);
@@ -891,11 +1006,7 @@ export function initPersistence() {
   }
 
   S.scaleLabelFromState = function scaleLabelFromState() {
-    if (!state.pxPerUnit || !state.scaleUnit) return null;
-    const unitInMm = { mm:1, cm:10, m:1000, in:25.4, ft:304.8 }[state.scaleUnit] || 1;
-    const realPerPx_mm = unitInMm / state.pxPerUnit;
-    const docPxPerMm = S.doc.wPx / S.doc.wMM;
-    const ratio = realPerPx_mm * docPxPerMm;
+    const ratio = S.scaleDenominator();
     if (!ratio || ratio <= 0) return null;
     return `1:${Math.round(ratio)}`;
   }
@@ -908,14 +1019,20 @@ export function initPersistence() {
   }
 
   S.applyScaleFromLabel = function applyScaleFromLabel(label: any) {
-    if (!label || state.pxPerUnit) return;
+    if (!label || S.hasCalibratedScale()) return;
     const m = String(label).match(/1\s*:\s*(\d+(?:\.\d+)?)/);
     if (!m) return;
     const ratio = parseFloat(m[1]);
     if (!ratio || ratio <= 0) return;
-    const docPxPerMm = S.doc.wPx / S.doc.wMM;
-    state.pxPerUnit = (10 * docPxPerMm) / ratio;
-    state.scaleUnit = 'cm';
+    const docUnitsPerPaperMM = S.doc.wPx / S.doc.wMM;
+    S.setScaleCalibration({
+      version: 1,
+      status: 'calibrated',
+      mmPerDocumentUnit: ratio / docUnitsPerPaperMM,
+      method: 'reference-line',
+      displayUnit: 'cm',
+      reference: null,
+    });
     S.updateScaleDisplay();
   }
 
@@ -947,13 +1064,17 @@ export function initPersistence() {
       if (state.paperBg) S.paper.style.background = state.paperBg;
     }
     if (typeof S.strokeCanvas !== 'undefined' && S.strokeCanvas) {
-      S.strokeCanvas.width = S.doc.wPx;
-      S.strokeCanvas.height = S.doc.hPx;
+      S.strokeCanvas.width = 1;
+      S.strokeCanvas.height = 1;
     }
     const gc = $el('guide-canvas');
-    if (gc) { gc.width = S.doc.wPx; gc.height = S.doc.hPx; }
+    if (gc) {
+      gc.width = state.guideType && state.guideType !== 'none' ? S.doc.wPx : 1;
+      gc.height = state.guideType && state.guideType !== 'none' ? S.doc.hPx : 1;
+    }
     if (typeof S.gridCanvas !== 'undefined' && S.gridCanvas) {
-      (S.gridCanvas as any).width = S.doc.wPx; (S.gridCanvas as any).height = S.doc.hPx;
+      (S.gridCanvas as any).width = state.showGrid ? S.doc.wPx : 1;
+      (S.gridCanvas as any).height = state.showGrid ? S.doc.hPx : 1;
     }
     S.updateDocInfo(S.paperFormatName(S.doc.wMM, S.doc.hMM));
 

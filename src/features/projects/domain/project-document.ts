@@ -4,6 +4,11 @@
  */
 
 import { CURRENT_PROJECT_SCHEMA_VERSION } from "./project-document-schema";
+import {
+  createUnsetScaleCalibration,
+  normalizeScaleCalibration,
+  type ScaleCalibration,
+} from "@/lib/scale-system";
 
 export { CURRENT_PROJECT_SCHEMA_VERSION };
 
@@ -199,6 +204,8 @@ export type ProjectDocumentSettings = {
   snapping: SnapSettings;
   perspectiveAssist: PerspectiveAssistSettings;
   drawingAssist: DrawingAssistSettings;
+  /** Canonical architectural calibration. Other scale fields are legacy aliases. */
+  scaleCalibration?: ScaleCalibration;
   /** Extra scale/display fields mirrored from legacy docs. */
   scaleUnit?: string;
   scaleLabel?: string | null;
@@ -242,10 +249,40 @@ export type LegacyStudioLayerMeta = {
   layer_id?: string;
   name: string;
   visible: boolean;
+  locked?: boolean;
+  layerKind?: ProjectLayerKind;
+  canvasSourceId?: string | null;
   opacity: number;
   trace?: number;
   blendMode?: string;
   raster_path?: string | null;
+  rendering?: {
+    architecture: "hybrid-v1";
+    tileSize: number;
+    strokes?: unknown;
+    tiles: Array<{
+      key: string;
+      column: number;
+      row: number;
+      width: number;
+      height: number;
+      storagePath?: string | null;
+      url?: string | null;
+      blob?: Blob | null;
+    }>;
+  } | null;
+  imageReference?: {
+    storagePath: string | null;
+    originalName: string;
+    mimeType: string;
+    byteSize: number;
+    pixelWidth: number;
+    pixelHeight: number;
+    transform: { x: number; y: number; w: number; h: number; rotation: number };
+    opacity: number;
+  } | null;
+  /** Runtime-only source while the image asset is pending upload. */
+  imageBlob?: Blob | null;
   /** Runtime-only; stripped before cloud JSON storage. */
   raster?: Blob | null;
   blob?: Blob | null;
@@ -261,6 +298,7 @@ export type LegacyStudioDocument = {
   paperBg?: string;
   grid?: { show: boolean; type?: string; spacingMM?: number };
   activeLayer?: number;
+  scaleCalibration?: ScaleCalibration;
   pxPerUnit?: number | null;
   scaleUnit?: string;
   scaleLabel?: string | null;
@@ -380,6 +418,7 @@ export function createEmptyProjectDocument(
       snapping: { enabled: false },
       perspectiveAssist: { enabled: false },
       drawingAssist: {},
+      scaleCalibration: createUnsetScaleCalibration(),
       scaleUnit: meta.scaleUnit ?? "cm",
       scaleLabel: meta.scaleLabel ?? null,
       pxPerUnit: null,
@@ -401,6 +440,7 @@ export function createEmptyProjectDocument(
     paperBg,
     grid: { show: false, type: "ortho", spacingMM: 5 },
     activeLayer: 0,
+    scaleCalibration: createUnsetScaleCalibration(),
     pxPerUnit: null,
     scaleUnit: meta.scaleUnit ?? "cm",
     scaleLabel: meta.scaleLabel ?? null,
@@ -414,6 +454,8 @@ export function createEmptyProjectDocument(
         layer_id: layerId,
         name: "Sketch 01",
         visible: true,
+        locked: false,
+        layerKind: "sketch",
         opacity: 1,
         trace: 0,
         blendMode: "source-over",
@@ -430,6 +472,7 @@ const BLOB_LAYER_KEYS = new Set([
   "raster",
   "blob",
   "pdfBlob",
+  "imageBlob",
   "imageData",
   "bitmap",
   "canvas",
@@ -459,6 +502,12 @@ export function stripLegacyStudioBlobs(
       if (key === "name" || key === "visible" || key === "opacity") continue;
       if (key === "trace" || key === "blendMode" || key === "raster_path") continue;
       next[key] = value;
+    }
+    if (layer.rendering?.architecture === "hybrid-v1") {
+      next.rendering = {
+        ...layer.rendering,
+        tiles: layer.rendering.tiles.map(({ blob: _blob, ...tile }) => tile),
+      };
     }
     return next;
   });
@@ -507,22 +556,23 @@ export function projectDocumentFromLegacyStudio(
 
   (legacyForScene.layers ?? []).forEach((layer, index) => {
     const id = assignedLayerIds[index]!;
+    const layerKind = layer.layerKind ?? "sketch";
     rootLayerIds.push(id);
     layers[id] = {
       id,
       name: layer.name || `Layer ${index + 1}`,
       visible: layer.visible !== false,
-      locked: false,
+      locked: layer.locked === true,
       opacity: typeof layer.opacity === "number" ? layer.opacity : 1,
       order: index,
-      kind: "sketch",
+      kind: layerKind,
       floorId: "floor_default",
       blendMode:
         typeof layer.blendMode === "string" ? layer.blendMode : "source-over",
       trace: typeof layer.trace === "number" ? layer.trace : 0,
       rasterPath: layer.raster_path ?? null,
       metadata: {
-        layerKind: "sketch",
+        layerKind,
         floorId: "floor_default",
         expanded: false,
       },
@@ -557,6 +607,11 @@ export function projectDocumentFromLegacyStudio(
   // Preserve original legacy (including Blobs) for the upload pipeline.
   const legacyStudio: LegacyStudioDocument = {
     ...legacy,
+    scaleCalibration: normalizeScaleCalibration(
+      legacy.scaleCalibration,
+      legacy.pxPerUnit,
+      legacy.scaleUnit,
+    ),
     layers: (legacy.layers ?? []).map((layer, index) => ({
       ...layer,
       layer_id: assignedLayerIds[index],
@@ -629,6 +684,11 @@ export function projectDocumentFromLegacyStudio(
       snapping: { enabled: false },
       perspectiveAssist: { enabled: false },
       drawingAssist: {},
+      scaleCalibration: normalizeScaleCalibration(
+        legacy.scaleCalibration,
+        legacy.pxPerUnit,
+        legacy.scaleUnit,
+      ),
       scaleUnit: legacy.scaleUnit ?? meta?.scaleUnit ?? "cm",
       scaleLabel: legacy.scaleLabel ?? meta?.scaleLabel ?? null,
       pxPerUnit: legacy.pxPerUnit ?? null,
@@ -659,6 +719,8 @@ export function legacyStudioFromProjectDocument(
         layer_id: id,
         name: layer?.name ?? `Layer ${index + 1}`,
         visible: layer?.visible !== false,
+        locked: layer?.locked === true,
+        layerKind: layer?.kind ?? "sketch",
         opacity: layer?.opacity ?? 1,
         trace: layer?.trace ?? 0,
         blendMode: layer?.blendMode ?? "source-over",
@@ -687,6 +749,8 @@ export function legacyStudioFromProjectDocument(
       spacingMM: doc.settings.grid.spacingMM,
     },
     activeLayer: 0,
+    scaleCalibration:
+      doc.settings.scaleCalibration ?? createUnsetScaleCalibration(),
     pxPerUnit: doc.settings.pxPerUnit ?? null,
     scaleUnit: doc.settings.scaleUnit ?? "cm",
     scaleLabel: doc.settings.scaleLabel ?? null,

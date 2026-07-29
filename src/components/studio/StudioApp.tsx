@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useProjectLoader } from "@/features/projects/hooks/use-project-loader";
 import type { ProjectSaveStatus } from "@/features/projects/domain/project-save-status";
+import {
+  deletePendingCanvasSource,
+  getPendingCanvasSource,
+} from "@/lib/projects/pending-canvas-source";
 import "@/styles/globals.css";
 
 type StudioAppProps = {
@@ -45,6 +49,7 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
   const [contentReady, setContentReady] = useState(false);
   const [navigating, setNavigating] = useState(false);
   const [modeLoading, setModeLoading] = useState(false);
+  const pendingSourceSentRef = useRef(false);
 
   const {
     status: loadStatus,
@@ -82,10 +87,50 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
           }
         })();
       }
+      if (data.type === "sketchtrude-canvas-source-import-result") {
+        if (data.projectId && data.projectId !== projectId) return;
+        if (data.ok) {
+          void deletePendingCanvasSource(projectId);
+        } else {
+          pendingSourceSentRef.current = false;
+          console.warn("Canvas source import failed:", data.error);
+        }
+      }
     }
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [projectId, session]);
+
+  useEffect(() => {
+    if (!contentReady || pendingSourceSentRef.current) return;
+    const win = iframeRef.current?.contentWindow;
+    if (!win) return;
+    pendingSourceSentRef.current = true;
+    void getPendingCanvasSource(projectId)
+      .then((pending) => {
+        if (!pending) return;
+        const file = new File([pending.blob], pending.fileName, {
+          type: pending.mimeType,
+          lastModified: pending.lastModified,
+        });
+        win.postMessage(
+          {
+            type: "sketchtrude-import-canvas-source",
+            projectId,
+            sourceId: pending.sourceId,
+            file,
+            kind: pending.kind,
+            pageNumber: pending.pageNumber,
+            pageCount: pending.pageCount,
+          },
+          "*",
+        );
+      })
+      .catch((error) => {
+        pendingSourceSentRef.current = false;
+        console.warn("Pending canvas source could not be loaded:", error);
+      });
+  }, [contentReady, projectId]);
 
   // Push save status into the engine topbar (left of Draw / Navigate).
   useEffect(() => {
@@ -206,7 +251,10 @@ export function StudioApp({ projectId, projectTitle }: StudioAppProps) {
         src={`/engine/studio-frame.html?project=${encodeURIComponent(projectId)}`}
         title={`SketchTrude — ${projectTitle}`}
         className="studio-iframe"
-        onLoad={() => setIframeShellLoaded(true)}
+        onLoad={() => {
+          pendingSourceSentRef.current = false;
+          setIframeShellLoaded(true);
+        }}
         allow="clipboard-read; clipboard-write"
       />
     </>

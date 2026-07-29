@@ -3,6 +3,7 @@
  * Modules assign functions/values onto S; boot wires cores then runs inits.
  */
 import type { EngineState, DocConfig, EngineScope } from "./types";
+import { createUnsetScaleCalibration } from "../../lib/scale-system";
 
 function computePx(wMM: number, hMM: number, dpi: number) {
   return {
@@ -51,6 +52,7 @@ export const state: EngineState = {
   snapshot: null,
   pxPerUnit: null,
   scaleUnit: "cm",
+  scaleCalibration: createUnsetScaleCalibration(),
   measurements: [],
   showGrid: false,
   gridType: "square",

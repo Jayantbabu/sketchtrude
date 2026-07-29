@@ -2,6 +2,7 @@
 import { S } from "./scope";
 import { initColor } from "./color";
 import { initFill } from "./fill";
+import { semanticToolRequiresScale } from "../../lib/scale-system";
 
 export function initToolUi() {
   const state = S.state;
@@ -14,6 +15,10 @@ export function initToolUi() {
   /* =================== TOOL UI =================== */
   S.setTool = function setTool(tool: any) {
     if (typeof S.hideShapeChip === 'function') S.hideShapeChip();
+    if (semanticToolRequiresScale(tool) && !S.hasCalibratedScale()) {
+      S.requestScaleForTool('wall');
+      return;
+    }
     // The old Brushes pseudo-tool now routes to the compact draw menu.
     if (tool === 'brushes') {
       if (typeof S.openDrawToolMenu === 'function') S.openDrawToolMenu();

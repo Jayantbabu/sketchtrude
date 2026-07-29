@@ -12,9 +12,21 @@ export function initSelection() {
   /* =================== SELECTION (magic wand) =================== */
   S.selOverlay = document.createElement('canvas');
   S.selOverlay.id = 'sel-overlay';
-  S.selOverlay.width = S.doc.wPx; S.selOverlay.height = S.doc.hPx;
+  S.selOverlay.width = 1; S.selOverlay.height = 1;
+  S.selOverlay.style.width = '100%';
+  S.selOverlay.style.height = '100%';
   S.paper.appendChild(S.selOverlay);
   S.selCtx = S.selOverlay.getContext('2d') as any;
+  S.ensureSelectionSurface = function ensureSelectionSurface() {
+    if (
+      S.selOverlay.width !== S.doc.wPx ||
+      S.selOverlay.height !== S.doc.hPx
+    ) {
+      S.selOverlay.width = S.doc.wPx;
+      S.selOverlay.height = S.doc.hPx;
+      S.selCtx = S.selOverlay.getContext('2d') as any;
+    }
+  }
   S.selBar = $el('sel-bar');
 
   state.selection = null;   // { mask:Uint8Array, bbox:{x,y,w,h} }
@@ -49,6 +61,7 @@ export function initSelection() {
 
   // Magic wand: sample the ACTIVE layer (image + strokes), grab the contiguous region.
   S.magicWandSelect = function magicWandSelect(p: any, tolerance: any) {
+    S.ensureSelectionSurface();
     S.commitFloating();
     const l = S.activeLayer();
     if (!S._sampleCanvas) { S._sampleCanvas = document.createElement('canvas'); S._sampleCtx = S._sampleCanvas.getContext('2d', { willReadFrequently: true }); }
@@ -121,6 +134,7 @@ export function initSelection() {
   }
 
   S.drawSelectionOverlay = function drawSelectionOverlay() {
+    S.ensureSelectionSurface();
     S.selCtx.setTransform(1, 0, 0, 1, 0, 0);
     S.selCtx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
     S.selOverlay.style.zIndex = (state.layers.length * 2 + 6).toString();

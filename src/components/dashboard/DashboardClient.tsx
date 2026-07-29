@@ -8,6 +8,10 @@ import type { Project } from "@/lib/types";
 import type { PaperTemplate } from "@/lib/paper-templates";
 import { NewProjectModal } from "@/components/dashboard/NewProjectModal";
 import { ProjectThumbnail } from "@/components/dashboard/ProjectThumbnail";
+import {
+  savePendingCanvasSource,
+  type CanvasSourceSelection,
+} from "@/lib/projects/pending-canvas-source";
 
 export function DashboardClient({ initialProjects }: { initialProjects: Project[] }) {
   const router = useRouter();
@@ -16,30 +20,60 @@ export function DashboardClient({ initialProjects }: { initialProjects: Project[
   const [showNewProject, setShowNewProject] = useState(false);
   const [openingId, setOpeningId] = useState<string | null>(null);
 
-  async function handleCreateProject(template: PaperTemplate, title: string) {
+  async function handleCreateProject(
+    template: PaperTemplate,
+    title: string,
+    source: CanvasSourceSelection | null,
+  ) {
     setLoading(true);
-    const res = await fetch("/api/projects", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title,
-        doc_width_mm: template.doc_width_mm,
-        doc_height_mm: template.doc_height_mm,
-        doc_dpi: template.doc_dpi,
-        scale_label: template.scale_label ?? null,
-        metadata: {
-          ...template.metadata,
-          infinite_canvas: !!template.infinite_canvas,
-          auto_expand: false,
-        },
-      }),
-    });
-    const project = await res.json();
-    if (project.id) {
+    try {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          doc_width_mm: source?.docWidthMm ?? template.doc_width_mm,
+          doc_height_mm: source?.docHeightMm ?? template.doc_height_mm,
+          doc_dpi: source?.dpi ?? template.doc_dpi,
+          scale_label: template.scale_label ?? null,
+          metadata: {
+            ...(source
+              ? {
+                  template: "imported-canvas",
+                  paper_bg: "#ffffff",
+                  canvas_source: {
+                    source_id: source.sourceId,
+                    kind: source.kind,
+                    name: source.file.name,
+                    mime_type: source.file.type,
+                    page_number: source.pageNumber,
+                    page_count: source.pageCount,
+                    width_px: source.widthPx,
+                    height_px: source.heightPx,
+                  },
+                }
+              : template.metadata),
+            infinite_canvas: source ? false : !!template.infinite_canvas,
+            auto_expand: false,
+          },
+        }),
+      });
+      const project = await res.json();
+      if (!res.ok || !project.id) {
+        throw new Error(project.error || "Project creation failed");
+      }
+      if (source) {
+        await savePendingCanvasSource(project.id, source);
+      }
+      setShowNewProject(false);
       router.push(`/studio/${project.id}`);
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "Project creation failed",
+      );
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-    setShowNewProject(false);
   }
 
   async function handleDelete(id: string) {
@@ -134,12 +168,14 @@ export function DashboardClient({ initialProjects }: { initialProjects: Project[
           ))}
         </div>
       )}
-      <NewProjectModal
-        open={showNewProject}
-        loading={loading}
-        onClose={() => setShowNewProject(false)}
-        onCreate={handleCreateProject}
-      />
+      {showNewProject ? (
+        <NewProjectModal
+          open
+          loading={loading}
+          onClose={() => setShowNewProject(false)}
+          onCreate={handleCreateProject}
+        />
+      ) : null}
     </div>
   );
 }

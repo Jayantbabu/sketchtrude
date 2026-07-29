@@ -564,6 +564,10 @@ export function initWallGraph() {
 
   /** Commit one independent wall segment from drag-draw. */
   S.commitWallSegment = function commitWallSegment(a: any, b: any) {
+    if (!S.hasCalibratedScale()) {
+      S.requestScaleForTool('wall');
+      return null;
+    }
     const ja = S.joinWallEndpoint(a);
     const jb = S.joinWallEndpoint(b);
     if (Math.hypot(jb.x - ja.x, jb.y - ja.y) < MIN_WALL_LEN) {

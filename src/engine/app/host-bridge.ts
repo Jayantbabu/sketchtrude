@@ -86,7 +86,7 @@ export function initHostBridge() {
   }
 
   S.applyScaleBlank = function applyScaleBlank() {
-    state.pxPerUnit = null;
+    S.clearScaleCalibration();
     S.updateScaleDisplay();
   }
 
@@ -232,6 +232,39 @@ export function initHostBridge() {
             type: 'sketchtrude-export-document-result',
             document: null,
             error: message,
+          }, '*');
+        }
+      }
+      return;
+    }
+
+    if (type === 'sketchtrude-import-canvas-source') {
+      const projectId = (window as any).__SKETCHTRUDE_PROJECT_ID;
+      if (data.projectId && String(data.projectId) !== String(projectId)) return;
+
+      try {
+        await S.importCanvasSource(data.file, {
+          sourceId: data.sourceId,
+          kind: data.kind,
+          pageNumber: data.pageNumber,
+        });
+        await S.saveDoc?.();
+        if (window.parent !== window) {
+          window.parent.postMessage({
+            type: 'sketchtrude-canvas-source-import-result',
+            projectId,
+            ok: true,
+          }, '*');
+        }
+      } catch (err) {
+        if (window.parent !== window) {
+          window.parent.postMessage({
+            type: 'sketchtrude-canvas-source-import-result',
+            projectId,
+            ok: false,
+            error: (err && (err as any).message)
+              ? (err as any).message
+              : 'Could not import the canvas source.',
           }, '*');
         }
       }

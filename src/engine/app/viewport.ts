@@ -36,6 +36,14 @@ export function initViewport() {
     S.paper.style.transform = `translate(-50%, -50%) scale(${state.zoom * state.baseZoom})`;
     (document.getElementById('zoom-level') as any).textContent = Math.round(state.zoom * 100) + '%';
     S.refreshMeasurements();
+    if (typeof S.schedulePdfRenders === 'function') S.schedulePdfRenders();
+    if (typeof S.scheduleImageRenders === 'function') S.scheduleImageRenders();
+    clearTimeout(S._tileCacheTimer);
+    S._tileCacheTimer = setTimeout(() => {
+      if (typeof S.refreshVectorTileCaches === 'function') {
+        S.refreshVectorTileCaches();
+      }
+    }, 140);
   }
 
   S.fitToScreen = function fitToScreen() {

@@ -65,6 +65,12 @@ export type ProjectSaveControllerOptions = {
     layerId: string,
     blob: Blob,
   ) => Promise<string>;
+  uploadLayerTile?: (
+    projectId: string,
+    layerId: string,
+    tileKey: string,
+    blob: Blob,
+  ) => Promise<string>;
 };
 
 export interface ProjectSaveController {
@@ -120,6 +126,7 @@ export async function prepareDocumentForPersistence(
   projectId: string,
   document: ProjectDocument,
   uploadLayerRaster?: ProjectSaveControllerOptions["uploadLayerRaster"],
+  uploadLayerTile?: ProjectSaveControllerOptions["uploadLayerTile"],
 ): Promise<ProjectDocument> {
   const legacy = document.extensions?.legacyStudio as
     | LegacyStudioDocument
@@ -156,6 +163,28 @@ export async function prepareDocumentForPersistence(
       layer.raster_path = await uploadLayerRaster(projectId, layerId, blob);
     } else if (!hasPath && blob && blob.size > 0) {
       // Offline / no uploader: keep blob for local recovery only.
+    }
+
+    if (layer.rendering?.architecture === "hybrid-v1") {
+      const tiles = [];
+      for (const tileEntry of layer.rendering.tiles) {
+        const tile = { ...tileEntry };
+        if (
+          uploadLayerTile &&
+          typeof Blob !== "undefined" &&
+          tile.blob instanceof Blob &&
+          tile.blob.size > 0
+        ) {
+          tile.storagePath = await uploadLayerTile(
+            projectId,
+            layerId,
+            tile.key,
+            tile.blob,
+          );
+        }
+        tiles.push(tile);
+      }
+      layer.rendering = { ...layer.rendering, tiles };
     }
 
     layers.push(layer);
@@ -219,6 +248,35 @@ async function defaultUploadLayerRaster(
   return body.raster_path;
 }
 
+async function defaultUploadLayerTile(
+  projectId: string,
+  layerId: string,
+  tileKey: string,
+  blob: Blob,
+): Promise<string> {
+  const form = new FormData();
+  form.set("layer_id", layerId);
+  form.set("tile_key", tileKey);
+  form.set("tile", blob, "tile.png");
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/document/tile`,
+    { method: "POST", body: form, credentials: "same-origin" },
+  );
+  if (!res.ok) {
+    throw new ProjectSaveNetworkError(`Layer tile upload failed (${res.status})`, {
+      status: res.status,
+      retryable: res.status >= 500 || res.status === 0,
+    });
+  }
+  const body = (await res.json()) as { storage_path?: string };
+  if (!body.storage_path) {
+    throw new ProjectSaveNetworkError("Layer tile upload returned no path", {
+      retryable: false,
+    });
+  }
+  return body.storage_path;
+}
+
 /**
  * Owns ProjectDocument JSON persistence: local IndexedDB first, then cloud sync.
  * Engine remains responsible for pixel crash-recovery of layer PNGs in its own IDB.
@@ -231,6 +289,9 @@ export class ProjectSaveControllerImpl implements ProjectSaveController {
   private readonly retryPolicy: RetryPolicy;
   private readonly uploadLayerRaster: NonNullable<
     ProjectSaveControllerOptions["uploadLayerRaster"]
+  >;
+  private readonly uploadLayerTile: NonNullable<
+    ProjectSaveControllerOptions["uploadLayerTile"]
   >;
   private readonly externalOnStatusChange?: ProjectSaveStatusListener;
 
@@ -259,6 +320,7 @@ export class ProjectSaveControllerImpl implements ProjectSaveController {
     this.retryPolicy = options.retryPolicy ?? defaultRetryPolicy;
     this.uploadLayerRaster =
       options.uploadLayerRaster ?? defaultUploadLayerRaster;
+    this.uploadLayerTile = options.uploadLayerTile ?? defaultUploadLayerTile;
     this.externalOnStatusChange = options.onStatusChange;
   }
 
@@ -729,6 +791,7 @@ export class ProjectSaveControllerImpl implements ProjectSaveController {
         projectId,
         this.withUpdatedMetadata(exported),
         this.uploadLayerRaster,
+        this.uploadLayerTile,
       );
       mutationVersion = Math.max(mutationVersion, this.adapter.getMutationVersion());
 

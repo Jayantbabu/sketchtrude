@@ -10,21 +10,48 @@ export function initFill() {
 
   /* =================== FLOOD FILL =================== */
   // Flatten all visible layers (image + strokes, honouring opacity) into one ctx.
-  S.flattenVisibleToCtx = function flattenVisibleToCtx(ctx: any) {
-    ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
+  S.flattenVisibleToCtx = function flattenVisibleToCtx(ctx: any, scale = 1) {
+    ctx.clearRect(0, 0, S.doc.wPx * scale, S.doc.hPx * scale);
     for (const l of state.layers) {
       if (l.visible === false) continue;
       ctx.save();
       ctx.globalAlpha = (l.opacity != null ? l.opacity : 1);
-      if (l.pdf && typeof S.drawPdfLayerToCtx === 'function') S.drawPdfLayerToCtx(l, ctx);
-      else if (l.imageCanvas && !l.imageBaked) ctx.drawImage(l.imageCanvas, 0, 0);
-      ctx.drawImage(l.canvas, 0, 0);
+      if (l.pdf && l.pdfCanvas && l.imageTransform) {
+        const t = l.imageTransform;
+        ctx.translate(t.x * scale, t.y * scale);
+        ctx.rotate((t.rotation || 0) * Math.PI / 180);
+        ctx.drawImage(
+          l.pdfCanvas,
+          -(t.w * scale) / 2,
+          -(t.h * scale) / 2,
+          t.w * scale,
+          t.h * scale,
+        );
+      } else if (l.image && !l.imageBaked && l.imageTransform) {
+        const t = l.imageTransform;
+        ctx.translate(t.x * scale, t.y * scale);
+        ctx.rotate((t.rotation || 0) * Math.PI / 180);
+        ctx.drawImage(
+          l.image,
+          -(t.w * scale) / 2,
+          -(t.h * scale) / 2,
+          t.w * scale,
+          t.h * scale,
+        );
+      } else if (l.imageCanvas && !l.imageBaked) {
+        ctx.drawImage(l.imageCanvas, 0, 0, S.doc.wPx * scale, S.doc.hPx * scale);
+      }
+      if (l.tileStore) l.tileStore.drawTo(ctx, scale);
+      if (l.vectorTileStore) l.vectorTileStore.drawTo(ctx, scale);
+      if (!l.tileStore) {
+        ctx.drawImage(l.canvas, 0, 0, S.doc.wPx * scale, S.doc.hPx * scale);
+      }
       ctx.restore();
     }
   }
 
   S._thumbCanvas = null;
-  S.drawVectorOverlayToCtx = function drawVectorOverlayToCtx(ctx: any) {
+  S.drawVectorOverlayToCtx = function drawVectorOverlayToCtx(ctx: any, scale = 1) {
     if (!S.rulerOverlay || typeof XMLSerializer === 'undefined') return Promise.resolve();
     const clone = S.rulerOverlay.cloneNode(true) as SVGSVGElement;
     clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -41,7 +68,15 @@ export function initFill() {
     return new Promise<void>((resolve) => {
       const image = new Image();
       image.onload = () => {
-        try { ctx.drawImage(image, 0, 0, S.doc.wPx, S.doc.hPx); } catch (_) {}
+        try {
+          ctx.drawImage(
+            image,
+            0,
+            0,
+            S.doc.wPx * scale,
+            S.doc.hPx * scale,
+          );
+        } catch (_) {}
         URL.revokeObjectURL(url);
         resolve();
       };
@@ -64,12 +99,9 @@ export function initFill() {
     const tctx = S._thumbCanvas.getContext('2d') as any;
     tctx.fillStyle = state.paperBg || '#ffffff';
     tctx.fillRect(0, 0, tw, th);
-    const full = document.createElement('canvas');
-    full.width = S.doc.wPx;
-    full.height = S.doc.hPx;
-    S.flattenVisibleToCtx(full.getContext('2d') as any);
-    await S.drawVectorOverlayToCtx(full.getContext('2d') as any);
-    tctx.drawImage(full, 0, 0, tw, th);
+    const scale = tw / S.doc.wPx;
+    S.flattenVisibleToCtx(tctx, scale);
+    await S.drawVectorOverlayToCtx(tctx, scale);
     return new Promise((resolve: any) => S._thumbCanvas.toBlob(resolve, 'image/jpeg', 0.84));
   }
 

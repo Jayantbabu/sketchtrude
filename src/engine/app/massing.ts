@@ -1161,11 +1161,11 @@ export function initMassing() {
     return contour;
   }
   S.pxPerMetre = function pxPerMetre() {
-    if (state.pxPerUnit && state.scaleUnit) {
-      const unitInMm = { mm:1, cm:10, m:1000, in:25.4, ft:304.8 }[state.scaleUnit] || 1;
-      return (state.pxPerUnit / unitInMm) * 1000;
-    }
-    return (S.doc.wPx / S.doc.wMM) * 1000;     // fall back to the sheet's physical size
+    const calibrated = S.mmToDocUnits(1000);
+    if (calibrated != null) return calibrated;
+    // Compatibility only for old unscaled non-wall content. New semantic walls
+    // are blocked until calibration, so this is never their architectural scale.
+    return (S.doc.wPx / S.doc.wMM) * 1000;
   }
   // Turn the current selection into an extruded prism and open the 3D S.massing view.
   S.extrudeSelection = function extrudeSelection() {
@@ -1188,7 +1188,7 @@ export function initMassing() {
     }
     const A = S.massing.baseAnchor;
     const poly = simp.map((p: any) => ({ x: (p.x - A.px) / A.ppm, z: (p.y - A.py) / A.ppm }));
-    const hadScale = !!(state.pxPerUnit && state.scaleUnit);
+    const hadScale = S.hasCalibratedScale();
     S.clearSelection();
     S.enterMassing();                  // refreshes the base composite from current layers
     S.massing.showBase = true;
@@ -1294,7 +1294,7 @@ export function initMassing() {
     }
     const A = S.massing.baseAnchor;
     const poly = ptsPx.map((p: any) => ({ x: (p.x - A.px) / A.ppm, z: (p.y - A.py) / A.ppm }));
-    const hadScale = !!(state.pxPerUnit && state.scaleUnit);
+    const hadScale = S.hasCalibratedScale();
     S.enterMassing();
     S.massing.showBase = true;
     S.updateMassBaseBtn();

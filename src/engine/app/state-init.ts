@@ -1,5 +1,7 @@
 /* Auto-converted from public/engine/app/01-state.js — shared scope S */
 import { S } from "./scope";
+import { RasterTileStore, tilesForRect } from "../rendering/tile-store";
+import { VectorStrokeStore } from "../rendering/vector-stroke-store";
 
 export function initState() {
   const state = S.state;
@@ -479,6 +481,7 @@ export function initState() {
 
   /* ── LayerEngine bridge (hierarchy) + raster surfaces (save-compatible) ── */
   S.layerEngine = S.__layersApi ? S.__layersApi.createLayerEngine() : null;
+  S.__tileCoordinatesForRect = tilesForRect;
   /** engineLayerId → runtime canvas surface (legacy layer object) */
   S.layerSurfaces = new Map();
   S.layerIdCounter = 1;
@@ -514,9 +517,30 @@ export function initState() {
     state.activeLayer = ai >= 0 ? ai : Math.max(0, next.length - 1);
   }
   S.allocateLayerSurface = function allocateLayerSurface(engineId: any, name: any) {
+    const engineLayer = S.layerEngine ? S.layerEngine.getLayer(engineId) : null;
+    const isReference = engineLayer?.layerKind === 'reference';
+    const tileRoot = document.createElement('div');
+    tileRoot.className = isReference ? 'reference-layer-root' : 'raster-tile-layer';
+    tileRoot.style.position = 'absolute';
+    tileRoot.style.inset = '0';
+    tileRoot.style.width = '100%';
+    tileRoot.style.height = '100%';
+    tileRoot.style.pointerEvents = 'none';
+    S.paper.insertBefore(tileRoot, S.rulerOverlay);
+    const rasterTileRoot = document.createElement('div');
+    const vectorTileRoot = document.createElement('div');
+    for (const root of [rasterTileRoot, vectorTileRoot]) {
+      root.style.position = 'absolute';
+      root.style.inset = '0';
+      root.style.width = '100%';
+      root.style.height = '100%';
+      root.style.pointerEvents = 'none';
+      tileRoot.appendChild(root);
+    }
+
     const imageCanvas = document.createElement('canvas');
-    imageCanvas.width = S.doc.wPx;
-    imageCanvas.height = S.doc.hPx;
+    imageCanvas.width = 1;
+    imageCanvas.height = 1;
     imageCanvas.style.position = 'absolute';
     imageCanvas.style.inset = '0';
     imageCanvas.style.width = '100%';
@@ -525,8 +549,15 @@ export function initState() {
     S.paper.insertBefore(imageCanvas, S.rulerOverlay);
 
     const canvas = document.createElement('canvas');
-    canvas.width = S.doc.wPx;
-    canvas.height = S.doc.hPx;
+    // Compatibility surface for tools that have not yet moved to sparse
+    // storage. Keeping it 1x1 prevents a blank large-format project from
+    // allocating a second full-document bitmap.
+    canvas.width = 1;
+    canvas.height = 1;
+    canvas.style.position = 'absolute';
+    canvas.style.inset = '0';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
     S.paper.insertBefore(canvas, S.rulerOverlay);
 
     const layer = {
@@ -535,6 +566,23 @@ export function initState() {
       name: name || 'Layer',
       canvas,
       ctx: canvas.getContext('2d') as any,
+      tileRoot,
+      tileStore: isReference ? null : new RasterTileStore({
+        width: S.doc.wPx,
+        height: S.doc.hPx,
+        root: rasterTileRoot,
+        tileSize: 512,
+        maxResidentTiles: 96,
+      }),
+      vectorTileStore: isReference ? null : new RasterTileStore({
+        width: S.doc.wPx,
+        height: S.doc.hPx,
+        root: vectorTileRoot,
+        tileSize: 512,
+        maxResidentTiles: 96,
+      }),
+      strokeStore: isReference ? null : new VectorStrokeStore(512),
+      renderMode: isReference ? 'reference' : 'hybrid-tiled',
       imageCanvas,
       imageCtx: imageCanvas.getContext('2d') as any,
       visible: true,
@@ -563,7 +611,6 @@ export function initState() {
     };
     layer.ctx.lineCap = 'round';
     layer.ctx.lineJoin = 'round';
-    layer._cur = layer.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
     S.layerSurfaces.set(engineId, layer);
     return layer;
   }
@@ -572,6 +619,11 @@ export function initState() {
     if (!surf) return;
     try { surf.canvas.remove(); } catch (_) {}
     try { if (surf.imageCanvas) surf.imageCanvas.remove(); } catch (_) {}
+    try { if (surf.tileStore) surf.tileStore.dispose(); } catch (_) {}
+    try { if (surf.vectorTileStore) surf.vectorTileStore.dispose(); } catch (_) {}
+    try { if (surf.tileRoot) surf.tileRoot.remove(); } catch (_) {}
+    try { if (surf.imageElement) surf.imageElement.remove(); } catch (_) {}
+    try { if (surf.imagePyramid) surf.imagePyramid.dispose(); } catch (_) {}
     try { if (surf.pdfRenderTask) surf.pdfRenderTask.cancel(); } catch (_) {}
     try { if (surf.pdfDocument) surf.pdfDocument.destroy(); } catch (_) {}
     try { if (surf.pdfCanvas) surf.pdfCanvas.remove(); } catch (_) {}

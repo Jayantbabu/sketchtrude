@@ -1,5 +1,9 @@
 /* Measure + scale — shared scope S */
 import { S } from "./scope";
+import {
+  calibrateFromReference,
+  type ScaleUnit,
+} from "../../lib/scale-system";
 
 export function initMeasure() {
   const state = S.state;
@@ -93,11 +97,27 @@ export function initMeasure() {
   });
 
   /* =================== SCALE =================== */
-  S.startScale = function startScale() {
+  S.startScale = function startScale(resumeTool?: string) {
+    if (resumeTool) state.scaleResumeTool = resumeTool;
     S.setTool('ruler');
     state.pendingScale = true;
-    S.showHint('Draw a line on the canvas, then enter its real-world length');
+    S.showHint('Calibrate scale · draw a line over a known distance');
   }
+
+  S.requestScaleForTool = function requestScaleForTool(tool: string) {
+    state.scaleResumeTool = tool;
+    const prompt = $el('scale-required-prompt');
+    if (!prompt) {
+      S.startScale(tool);
+      return;
+    }
+    // Portal above the canvas so pointer capture from draw/navigate cannot
+    // intercept the modal controls.
+    if (prompt.parentElement !== document.body) document.body.appendChild(prompt);
+    prompt.style.display = 'block';
+    prompt.classList.add('show');
+    S.showHint('Wall requires a calibrated reference scale');
+  };
 
   S.openScaleApply = function openScaleApply() {
     S.scalePrompt.style.display = 'block';   // override inline display:none
@@ -125,8 +145,12 @@ export function initMeasure() {
     const dx = (state.pendingScaleEnd as any).x - (state.pendingScaleStart as any).x;
     const dy = (state.pendingScaleEnd as any).y - (state.pendingScaleStart as any).y;
     const distPx = Math.sqrt(dx*dx + dy*dy);
-    state.pxPerUnit = distPx / v;
-    state.scaleUnit = u;
+    S.setScaleCalibration(
+      calibrateFromReference(distPx, v, u as ScaleUnit),
+    );
+    if (S.massing?.baseAnchor) {
+      S.massing.baseAnchor.ppm = S.pxPerMetre();
+    }
     const label = S.updateScaleDisplay();
     S.syncProjectScale(label);
     S.scalePrompt.classList.remove('show');
@@ -136,8 +160,13 @@ export function initMeasure() {
     state.pendingScaleEnd = null;
     S.refreshMeasurements();
     S.renderSchedule();
+    if (typeof S.syncWallsToMasses === 'function') S.syncWallsToMasses();
+    if (typeof S.drawDocGrid === 'function') S.drawDocGrid();
     S.scheduleAutosave();
-    S.showHint(`Scale set · ${v} ${u} reference · measurements now in real units`);
+    const resumeTool = state.scaleResumeTool;
+    state.scaleResumeTool = null;
+    S.showHint(`Scale calibrated · ${v} ${u} reference · measurements now use real units`);
+    if (resumeTool) setTimeout(() => S.setTool(resumeTool), 0);
   });
 
   $el('scale-cancel').addEventListener('click', () => {
@@ -147,8 +176,36 @@ export function initMeasure() {
     state.pendingScaleStart = null;
     state.pendingScaleEnd = null;
     state.measurePreview = null;
+    state.scaleResumeTool = null;
     S.refreshMeasurements();
   });
+
+  const closeRequiredPrompt = () => {
+    const prompt = $el('scale-required-prompt');
+    if (!prompt) return;
+    prompt.classList.remove('show');
+    prompt.style.display = 'none';
+  };
+
+  // Capture pointerdown before canvas panning/drawing handlers. Using delegation
+  // also keeps the controls live after the prompt is portalled to <body>.
+  document.addEventListener('pointerdown', (event: any) => {
+    const action = event.target?.closest?.(
+      '#scale-required-calibrate,#scale-required-cancel',
+    );
+    if (!action) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (action.id === 'scale-required-calibrate') {
+      const resumeTool = state.scaleResumeTool || 'wall';
+      closeRequiredPrompt();
+      S.startScale(resumeTool);
+    } else {
+      closeRequiredPrompt();
+      state.scaleResumeTool = null;
+      S.showHint('Wall creation cancelled · scale remains unset');
+    }
+  }, true);
 
 
 }

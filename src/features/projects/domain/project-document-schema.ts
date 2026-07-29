@@ -14,6 +14,21 @@ const canvasBackgroundSchema = z.object({
   assetId: z.string().optional(),
 });
 
+const scaleCalibrationSchema = z.object({
+  version: z.literal(1),
+  status: z.enum(["unset", "calibrated"]),
+  mmPerDocumentUnit: z.number().positive().nullable(),
+  method: z.literal("reference-line").nullable(),
+  displayUnit: z.enum(["mm", "cm", "m", "in", "ft"]),
+  reference: z
+    .object({
+      documentDistance: z.number().positive(),
+      realDistance: z.number().positive(),
+      unit: z.enum(["mm", "cm", "m", "in", "ft"]),
+    })
+    .nullable(),
+});
+
 const gridSettingsSchema = z
   .object({
     show: z.boolean(),
@@ -107,6 +122,7 @@ export const projectDocumentSchema = z.object({
     snapping: snapSettingsSchema,
     perspectiveAssist: perspectiveAssistSchema,
     drawingAssist: drawingAssistSchema,
+    scaleCalibration: scaleCalibrationSchema.optional(),
     scaleUnit: z.string().optional(),
     scaleLabel: z.string().nullable().optional(),
     pxPerUnit: z.number().nullable().optional(),

@@ -380,7 +380,7 @@
   /* SCALE PROMPT — floating dialog, must sit above canvas */
   .scale-prompt{position:absolute;background:var(--paper);border:1px solid var(--line-2);border-radius:var(--r-lg);padding:14px;box-shadow:var(--shadow-lg);z-index:150;width:240px;}
   /* Portal targets: keep above #modal-scrim (2090) and outside #canvas-area clipping */
-  #canvas-size-dialog,#scale-prompt{position:fixed;z-index:2100;pointer-events:auto;}
+  #canvas-size-dialog,#scale-prompt,#scale-required-prompt{position:fixed;z-index:2100;pointer-events:auto;}
   #modal-scrim{position:fixed;inset:0;z-index:2090;background:rgba(0,0,0,0.22);display:none;pointer-events:auto;}
   #grid-popover,#guide-popover{position:fixed;left:auto;right:12px;top:52px;bottom:auto;z-index:2200;pointer-events:auto;}
   .sp-title{font-size:12px;font-weight:700;color:var(--ink);margin-bottom:4px;}

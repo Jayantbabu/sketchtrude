@@ -15,8 +15,8 @@ export function initStrokeInput() {
   // alpha into a dark blob. On lift, the whole buffer is composited onto
   // the active layer once, at the target opacity + blend mode.
   S.strokeCanvas = document.createElement('canvas');
-  S.strokeCanvas.width = S.doc.wPx;
-  S.strokeCanvas.height = S.doc.hPx;
+  S.strokeCanvas.width = 1;
+  S.strokeCanvas.height = 1;
   S.strokeCanvas.id = 'stroke-buffer';
   S.strokeCanvas.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;display:block;pointer-events:none;opacity:0;will-change:opacity;';
   S.strokeCtx = S.strokeCanvas.getContext('2d') as any;
@@ -28,6 +28,142 @@ export function initStrokeInput() {
 
   S.strokeTarget = function strokeTarget() {
     return state.usingBuffer ? S.strokeCtx : S.activeLayer().ctx;
+  }
+
+  S.drawOnLayerTiles = function drawOnLayerTiles(
+    layer: any,
+    rect: any,
+    draw: (ctx: CanvasRenderingContext2D) => void,
+  ) {
+    if (layer?.tileStore) {
+      layer.tileStore.forEachContext(
+        rect,
+        (ctx: CanvasRenderingContext2D) => draw(ctx),
+      );
+      return;
+    }
+    draw(layer.ctx);
+  }
+
+  S.stampLayer = function stampLayer(
+    layer: any,
+    x: number,
+    y: number,
+    radius: number,
+    draw: (ctx: CanvasRenderingContext2D) => void,
+  ) {
+    const rect = { x: x - radius, y: y - radius, w: radius * 2, h: radius * 2 };
+    S.drawOnLayerTiles(layer, rect, draw);
+    if (S.activeBrush()?.kind === 'erase' && layer?.vectorTileStore) {
+      layer.vectorTileStore.forEachContext(
+        rect,
+        (ctx: CanvasRenderingContext2D) => draw(ctx),
+      );
+    }
+  }
+
+  S.paintRecordedStroke = function paintRecordedStroke(
+    ctx: CanvasRenderingContext2D,
+    stroke: any,
+  ) {
+        if (stroke.stamps?.length) {
+          for (const stamp of stroke.stamps) {
+            const gradient = ctx.createRadialGradient(
+              stamp.x,
+              stamp.y,
+              0,
+              stamp.x,
+              stamp.y,
+              stamp.radius,
+            );
+            gradient.addColorStop(0, `rgba(0,0,0,${stamp.strength})`);
+            gradient.addColorStop(
+              Math.max(0.05, stamp.hardness),
+              `rgba(0,0,0,${stamp.strength * 0.82})`,
+            );
+            gradient.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.save();
+            ctx.globalCompositeOperation = 'destination-out';
+            ctx.fillStyle = gradient;
+            ctx.fillRect(
+              stamp.x - stamp.radius,
+              stamp.y - stamp.radius,
+              stamp.radius * 2,
+              stamp.radius * 2,
+            );
+            ctx.restore();
+          }
+          return;
+        }
+        ctx.strokeStyle = stroke.color;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.globalAlpha = stroke.opacity ?? 1;
+        ctx.globalCompositeOperation = stroke.blendMode || 'source-over';
+        ctx.beginPath();
+        ctx.moveTo(stroke.start.x, stroke.start.y);
+        for (const segment of stroke.segments) {
+          ctx.lineWidth = segment.width;
+          ctx.quadraticCurveTo(
+            segment.cx,
+            segment.cy,
+            segment.mx,
+            segment.my,
+          );
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(segment.mx, segment.my);
+        }
+  }
+
+  S.renderRecordedStroke = function renderRecordedStroke(layer: any, stroke: any) {
+    if (
+      !layer?.vectorTileStore ||
+      (!stroke?.segments?.length && !stroke?.stamps?.length) ||
+      !stroke.bounds
+    ) return;
+    layer.vectorTileStore.forEachContext(
+      stroke.bounds,
+      (ctx: CanvasRenderingContext2D) => S.paintRecordedStroke(ctx, stroke),
+    );
+  }
+
+  S.refreshVectorTileCaches = async function refreshVectorTileCaches() {
+    if (!S.area || typeof S.clientToCanvas !== 'function') return;
+    const area = S.area.getBoundingClientRect();
+    const a = S.clientToCanvas(area.left, area.top);
+    const b = S.clientToCanvas(area.right, area.bottom);
+    const visible = {
+      x: Math.max(0, Math.min(a.x, b.x)),
+      y: Math.max(0, Math.min(a.y, b.y)),
+      w: Math.abs(b.x - a.x),
+      h: Math.abs(b.y - a.y),
+    };
+    for (const layer of state.layers || []) {
+      if (layer.tileStore) {
+        await layer.tileStore.ensureVisible(visible);
+        layer.tileStore.evictOutside(visible);
+      }
+      if (!layer.vectorTileStore || !layer.strokeStore) continue;
+      layer.vectorTileStore.dropOutside(visible, true);
+      const coordinates = S.__tileCoordinatesForRect?.(
+        visible,
+        S.doc.wPx,
+        S.doc.hPx,
+        layer.vectorTileStore.tileSize,
+      ) || [];
+      for (const tile of coordinates) {
+        if (layer.vectorTileStore.has(tile.key)) continue;
+        const strokes = layer.strokeStore.inTile(tile.column, tile.row);
+        if (!strokes.length) continue;
+        layer.vectorTileStore.forEachContext(
+          { x: tile.x, y: tile.y, w: tile.width, h: tile.height },
+          (ctx: CanvasRenderingContext2D) => {
+            for (const stroke of strokes) S.paintRecordedStroke(ctx, stroke);
+          },
+        );
+      }
+    }
   }
 
 
@@ -620,7 +756,21 @@ export function initStrokeInput() {
 
     if (['rect', 'circle'].includes(state.tool)) {
       state._shapeEnd = null;
-      state.snapshot = l.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
+      state.snapshot = null;
+      const dpr = window.devicePixelRatio || 1;
+      const previewScale = Math.max(
+        0.2,
+        Math.min(
+          state.baseZoom * state.zoom * dpr,
+          Math.min(1, 1600 / Math.max(S.doc.wPx, S.doc.hPx)),
+        ),
+      );
+      state.shapePreviewScale = previewScale;
+      S.strokeCanvas.width = Math.max(1, Math.round(S.doc.wPx * previewScale));
+      S.strokeCanvas.height = Math.max(1, Math.round(S.doc.hPx * previewScale));
+      S.strokeCtx.setTransform(previewScale, 0, 0, previewScale, 0, 0);
+      S.strokeCanvas.style.opacity = '1';
+      S.strokeCanvas.style.zIndex = String(state.activeLayer * 2 + 4);
       return;
     }
 
@@ -628,10 +778,17 @@ export function initStrokeInput() {
     // The first pointermove event draws the actual opening segment with real pressure,
     // so the stroke start matches the brush opacity exactly.
     const brush = pointerBrush;
+    state.effectStamps = [];
+    if (l.tileStore) l.tileStore.beginPatch();
+    if (l.vectorTileStore) l.vectorTileStore.beginPatch();
 
     // Decide whether to use the full-opacity stroke buffer.
     // Texture brushes and the eraser draw directly to the layer.
-    state.usingBuffer = (brush.kind !== 'erase' && !S.isProceduralBrush(brush) && !(brush.tipType === 'texture' && brush.tipImage));
+    state.usingBuffer = (
+      !S.isProceduralBrush(brush)
+      && brush.id !== 'eraser-soft'
+      && !(brush.tipType === 'texture' && brush.tipImage)
+    );
     if (state.usingBuffer) {
       // Render the LIVE stroke to a display-resolution buffer (cheap to fill and
       // composite each frame), then replay at full resolution once on lift. This
@@ -667,11 +824,19 @@ export function initStrokeInput() {
     const tgt = S.strokeTarget();
     state.strokeBBox = { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y, maxW: state.size };
     if (brush.id === 'eraser-soft') {
-      S.stampSoftEraser(l.ctx, brush, p.x, p.y, S.pressureFor(e));
+      const pressure = S.pressureFor(e);
+      const normalized = Math.max(0.05, Math.min(1, pressure));
+      const radius = Math.max(2, state.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * normalized) * 0.5);
+      const strength = Math.max(0.06, Math.min(1, state.alpha * (0.2 + normalized * 0.8)));
+      state.effectStamps.push({ x: p.x, y: p.y, radius, strength, hardness: brush.hardness || 0.25 });
+      S.stampLayer(l, p.x, p.y, state.size, (ctx: CanvasRenderingContext2D) =>
+        S.stampSoftEraser(ctx, brush, p.x, p.y, pressure));
     } else if (S.isProceduralBrush(brush)) {
-      S.stampProceduralTexture(l.ctx, brush, p.x, p.y, S.pressureFor(e), 0);
+      S.stampLayer(l, p.x, p.y, state.size * 2, (ctx: CanvasRenderingContext2D) =>
+        S.stampProceduralTexture(ctx, brush, p.x, p.y, S.pressureFor(e), 0));
     } else if (brush.tipType === 'texture' && brush.tipImage) {
-      S.stampTexture(l.ctx, brush, p.x, p.y, S.pressureFor(e));
+      S.stampLayer(l, p.x, p.y, state.size * 2, (ctx: CanvasRenderingContext2D) =>
+        S.stampTexture(ctx, brush, p.x, p.y, S.pressureFor(e)));
     } else {
       S.configurePen(tgt, S.pressureFor(e), brush, state.usingBuffer);
       tgt.beginPath();
@@ -694,7 +859,7 @@ export function initStrokeInput() {
     if ((state.pinchStart as any) && S.activePointers.size === 2) {
       const pts: any[] = Array.from(S.activePointers.values());
       const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-      state.zoom = Math.max(0.2, Math.min(8, (state.pinchStart as any).zoom * (dist / (state.pinchStart as any).dist)));
+      state.zoom = Math.max(0.2, Math.min(64, (state.pinchStart as any).zoom * (dist / (state.pinchStart as any).dist)));
       const midX = (pts[0].x + pts[1].x) / 2;
       const midY = (pts[0].y + pts[1].y) / 2;
       state.panX = (state.pinchStart as any).panX + (midX - (state.pinchStart as any).midX);
@@ -760,27 +925,31 @@ export function initStrokeInput() {
         $el('snap-badge').classList.remove('show');
       }
       state._shapeEnd = { x: tp.x, y: tp.y };
-      l.ctx.putImageData(state.snapshot, 0, 0);
+      const previewScale = state.shapePreviewScale || 1;
+      S.strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
+      S.strokeCtx.clearRect(0, 0, S.strokeCanvas.width, S.strokeCanvas.height);
+      S.strokeCtx.setTransform(previewScale, 0, 0, previewScale, 0, 0);
+      const previewCtx = S.strokeCtx;
       // Shapes always draw a clean ink stroke — never inherit the eraser or a
       // previous brush's blend mode (which would erase or composite oddly).
-      l.ctx.globalCompositeOperation = 'source-over';
-      l.ctx.globalAlpha = state.alpha;
-      l.ctx.strokeStyle = state.color;
-      l.ctx.lineWidth = Math.max(0.5, state.size);
-      l.ctx.lineCap = 'round';
-      l.ctx.lineJoin = 'round';
-      l.ctx.beginPath();
+      previewCtx.globalCompositeOperation = 'source-over';
+      previewCtx.globalAlpha = state.alpha;
+      previewCtx.strokeStyle = state.color;
+      previewCtx.lineWidth = Math.max(0.5, state.size);
+      previewCtx.lineCap = 'round';
+      previewCtx.lineJoin = 'round';
+      previewCtx.beginPath();
       if ((state.tool as any) === 'line') {
-        l.ctx.moveTo(state.startX, state.startY);
-        l.ctx.lineTo(tp.x, tp.y);
-        l.ctx.stroke();
+        previewCtx.moveTo(state.startX, state.startY);
+        previewCtx.lineTo(tp.x, tp.y);
+        previewCtx.stroke();
       } else if (state.tool === 'rect') {
-        l.ctx.strokeRect(state.startX, state.startY, tp.x - state.startX, tp.y - state.startY);
+        previewCtx.strokeRect(state.startX, state.startY, tp.x - state.startX, tp.y - state.startY);
       } else if (state.tool === 'circle') {
         const dx = tp.x - state.startX, dy = tp.y - state.startY;
         const r = Math.sqrt(dx * dx + dy * dy);
-        l.ctx.arc(state.startX, state.startY, r, 0, Math.PI * 2);
-        l.ctx.stroke();
+        previewCtx.arc(state.startX, state.startY, r, 0, Math.PI * 2);
+        previewCtx.stroke();
       }
       return;
     }
@@ -846,7 +1015,11 @@ export function initStrokeInput() {
 
       if (brush.id === 'eraser-soft') {
         const effSize = Math.max(2, state.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * taperPr));
-        S.stampSoftEraser(l.ctx, brush, p.x, p.y, taperPr);
+        const radius = effSize * 0.5;
+        const strength = Math.max(0.06, Math.min(1, state.alpha * (0.2 + taperPr * 0.8)));
+        state.effectStamps.push({ x: p.x, y: p.y, radius, strength, hardness: brush.hardness || 0.25 });
+        S.stampLayer(l, p.x, p.y, effSize, (ctx: CanvasRenderingContext2D) =>
+          S.stampSoftEraser(ctx, brush, p.x, p.y, taperPr));
         const bb = state.strokeBBox;
         if (bb) {
           bb.minX = Math.min(bb.minX, p.x); bb.minY = Math.min(bb.minY, p.y);
@@ -859,7 +1032,8 @@ export function initStrokeInput() {
         const step = Math.max(1, (brush.spacing || 0.2) * effSize);
         state.stampAccum += segDist;
         if (state.stampAccum >= step) {
-          S.stampProceduralTexture(l.ctx, brush, p.x, p.y, taperPr, Math.atan2(dy, dx));
+          S.stampLayer(l, p.x, p.y, effSize * 1.5, (ctx: CanvasRenderingContext2D) =>
+            S.stampProceduralTexture(ctx, brush, p.x, p.y, taperPr, Math.atan2(dy, dx)));
           state.stampAccum %= step;
         }
         const bb = state.strokeBBox;
@@ -881,7 +1055,8 @@ export function initStrokeInput() {
           const sy = state.lastStampY + dy * t;
           const savedSize = brush.size;
           brush.size *= velMul * tiltMul;
-          S.stampTexture(l.ctx, brush, sx, sy, taperPr);
+          S.stampLayer(l, sx, sy, effSize * 1.5, (ctx: CanvasRenderingContext2D) =>
+            S.stampTexture(ctx, brush, sx, sy, taperPr));
           brush.size = savedSize;
           state.lastStampX = sx; state.lastStampY = sy;
           state.stampAccum = overshoot;
@@ -1049,6 +1224,9 @@ export function initStrokeInput() {
     if (['rect', 'circle'].includes(state.tool)) {
       if (state._shapeEnd) {
         const s = { x: state.startX, y: state.startY }, en = state._shapeEnd;
+        S.strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
+        S.strokeCtx.clearRect(0, 0, S.strokeCanvas.width, S.strokeCanvas.height);
+        S.strokeCanvas.style.opacity = '0';
         if (state.snapshot) l.ctx.putImageData(state.snapshot, 0, 0);   // wipe the raster preview — shape is vector now
         let geom: any = null, entity: any = null;
         const sw = Math.max(0.5, state.size);
@@ -1088,13 +1266,60 @@ export function initStrokeInput() {
       const rect = S._bboxRect(state.strokeBBox);
 
       if (state.usingBuffer) {
-        // Pen path: capture the region BEFORE compositing (cheap), composite the
-        // full-res replay, then capture the region AFTER. Region-only undo.
         const segs = state.strokeSegs || [];
-        let before = null;
-        if (rect) before = l._cur ? S._extractRegion(l._cur, rect.x, rect.y, rect.w, rect.h)
-                                  : l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-        if (segs.length) {
+        let strokeRecord = null;
+        if (segs.length && rect && l.vectorTileStore) {
+          const renderStroke = (fctx: CanvasRenderingContext2D) => {
+            fctx.strokeStyle = state.strokeColor || state.color;
+            fctx.lineCap = brush.tipType === 'chisel' || brush.tipType === 'flat' ? 'square' : 'round';
+            fctx.lineJoin = 'round';
+            fctx.globalAlpha = state.alpha;
+            fctx.globalCompositeOperation = brush.kind === 'erase'
+              ? 'destination-out'
+              : ((brush.blend && brush.blend !== 'source-over') ? brush.blend : 'source-over');
+            fctx.beginPath();
+            fctx.moveTo(state.strokeStart.x, state.strokeStart.y);
+            for (const segment of segs) {
+              fctx.lineWidth = segment.w;
+              fctx.quadraticCurveTo(segment.cx, segment.cy, segment.mx, segment.my);
+              fctx.stroke();
+              fctx.beginPath();
+              fctx.moveTo(segment.mx, segment.my);
+            }
+          };
+          l.vectorTileStore.forEachContext(
+            rect,
+            (ctx: CanvasRenderingContext2D) => renderStroke(ctx),
+          );
+          if (brush.kind === 'erase' && l.tileStore) {
+            l.tileStore.forEachContext(
+              rect,
+              (ctx: CanvasRenderingContext2D) => renderStroke(ctx),
+            );
+          }
+          if (l.strokeStore) {
+            strokeRecord = l.strokeStore.add({
+              brushId: brush.id || state.tool,
+              color: state.strokeColor || state.color,
+              opacity: state.alpha,
+              blendMode: brush.kind === 'erase'
+                ? 'destination-out'
+                : ((brush.blend && brush.blend !== 'source-over') ? brush.blend : 'source-over'),
+              start: { ...state.strokeStart },
+              segments: segs.map((segment: any) => ({
+                cx: segment.cx,
+                cy: segment.cy,
+                mx: segment.mx,
+                my: segment.my,
+                width: segment.w,
+              })),
+              bounds: { ...rect },
+            });
+          }
+        } else if (segs.length) {
+          let before = null;
+          if (rect) before = l._cur ? S._extractRegion(l._cur, rect.x, rect.y, rect.w, rect.h)
+                                    : l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
           if (S.replayCanvas.width !== S.doc.wPx || S.replayCanvas.height !== S.doc.hPx) {
             S.replayCanvas.width = S.doc.wPx; S.replayCanvas.height = S.doc.hPx;
           } else {
@@ -1119,6 +1344,12 @@ export function initStrokeInput() {
           l.ctx.globalCompositeOperation = (brush.blend && brush.blend !== 'source-over') ? brush.blend : 'source-over';
           l.ctx.drawImage(S.replayCanvas, 0, 0);
           l.ctx.restore();
+          if (rect && before) {
+            const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+            S.pushRegionSnapshot(l, rect.x, rect.y, before, after);
+          } else {
+            S.saveSnapshot(l);
+          }
         }
         S.strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
         S.strokeCtx.clearRect(0, 0, S.strokeCanvas.width, S.strokeCanvas.height);
@@ -1126,16 +1357,46 @@ export function initStrokeInput() {
         S.strokeCanvas.style.mixBlendMode = 'normal';
         state.usingBuffer = false;
         state.strokeSegs = [];
-        if (rect && before) {
-          const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-          S.pushRegionSnapshot(l, rect.x, rect.y, before, after);
-        } else {
-          S.saveSnapshot(l);
+        if (l.tileStore) {
+          const patches = l.tileStore.endPatch();
+          const vectorPatches = l.vectorTileStore?.endPatch?.() || [];
+          if (patches.length || vectorPatches.length) {
+            l.history.push({
+              tiles: patches,
+              vectorTiles: vectorPatches,
+              stroke: strokeRecord,
+            });
+            l.redo = [];
+          }
         }
       } else {
         // Eraser path: layer already modified. Pull "before" from the cached full
         // pixels (_cur) and "after" from the layer — both region-sized.
-        if (rect && l._cur) {
+        if (l.tileStore) {
+          const patches = l.tileStore.endPatch();
+          const vectorPatches = l.vectorTileStore?.endPatch?.() || [];
+          let effectStroke = null;
+          if (state.effectStamps?.length && l.strokeStore && rect) {
+            effectStroke = l.strokeStore.add({
+              brushId: brush.id || 'eraser-soft',
+              color: '#000000',
+              opacity: 1,
+              blendMode: 'destination-out',
+              start: { x: state.startX, y: state.startY },
+              segments: [],
+              stamps: state.effectStamps.map((stamp: any) => ({ ...stamp })),
+              bounds: { ...rect },
+            });
+          }
+          if (patches.length || vectorPatches.length) {
+            l.history.push({
+              tiles: patches,
+              vectorTiles: vectorPatches,
+              stroke: effectStroke,
+            });
+            l.redo = [];
+          }
+        } else if (rect && l._cur) {
           const before = S._extractRegion(l._cur, rect.x, rect.y, rect.w, rect.h);
           const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
           S.pushRegionSnapshot(l, rect.x, rect.y, before, after);
@@ -1182,10 +1443,10 @@ export function initStrokeInput() {
   S.configurePen = function configurePen(ctx: any, pressure: any, brush: any, skipMaster: any) {
     brush = brush || S.activeBrush();
     const brushApi = S.brushes;
-    // Scale-aware mm → px: S.doc.dpi / 25.4, or project pxPerUnit when set.
-    const pxPerMm = state.pxPerUnit
-      ? (state.scaleUnit === 'mm' ? state.pxPerUnit : state.scaleUnit === 'cm' ? state.pxPerUnit / 10 : state.pxPerUnit / 1000)
-      : (S.doc.dpi / 25.4);
+    // Brush line weights are paper millimetres, not model millimetres. They stay
+    // visually consistent when the drawing is recalibrated and work for imperial
+    // projects without unit-specific conversion branches.
+    const pxPerMm = S.doc.dpi / 25.4;
 
     if (brushApi && typeof brushApi.resolveStrokeParams === 'function') {
       const params = brushApi.resolveStrokeParams(brush, pressure, {
@@ -1321,7 +1582,7 @@ export function initStrokeInput() {
       e.preventDefault();
       const delta = -e.deltaY * 0.001;
       const oldZoom = state.zoom;
-      state.zoom = Math.max(0.2, Math.min(8, state.zoom * (1 + delta)));
+      state.zoom = Math.max(0.2, Math.min(64, state.zoom * (1 + delta)));
       // zoom around cursor
       const areaRect = S.area.getBoundingClientRect();
       const cx = e.clientX - areaRect.left - areaRect.width/2;

@@ -137,7 +137,14 @@ export function shouldExpandAtEdge(
   };
 }
 
-export function clampZoom(zoom: number, min = 0.2, max = 8): number {
+export const MIN_CANVAS_ZOOM = 0.2;
+export const MAX_CANVAS_ZOOM = 64;
+
+export function clampZoom(
+  zoom: number,
+  min = MIN_CANVAS_ZOOM,
+  max = MAX_CANVAS_ZOOM,
+): number {
   return Math.max(min, Math.min(max, zoom));
 }
 

@@ -141,4 +141,63 @@ describe("prepareDocumentForPersistence", () => {
     expect(prepared.scene.layers["pdf-layer"]?.rasterPath)
       .toBe("user/proj/layers/pdf-layer.png");
   });
+
+  it("uploads only hybrid tile blobs and preserves vector stroke data", async () => {
+    const doc = createEmptyProjectDocument("proj-hybrid");
+    const legacy = doc.extensions!.legacyStudio as LegacyStudioDocument;
+    const tileBlob = new Blob(["tile"], { type: "image/png" });
+    legacy.layers[0]!.rendering = {
+      architecture: "hybrid-v1",
+      tileSize: 512,
+      strokes: {
+        version: 1,
+        tileSize: 512,
+        strokes: [{ id: "stroke-1", pressure: [0.2, 0.8] }],
+      },
+      tiles: [
+        {
+          key: "0:0",
+          column: 0,
+          row: 0,
+          width: 512,
+          height: 512,
+          blob: tileBlob,
+        },
+        {
+          key: "1:0",
+          column: 1,
+          row: 0,
+          width: 512,
+          height: 512,
+          storagePath: "user/proj/tile-existing.png",
+        },
+      ],
+    };
+    const uploadTile = vi.fn(
+      async (_projectId: string, layerId: string, key: string) =>
+        `user/proj/${layerId}/${key.replace(":", "_")}.png`,
+    );
+
+    const prepared = await prepareDocumentForPersistence(
+      "proj-hybrid",
+      doc,
+      undefined,
+      uploadTile,
+    );
+    const rendering = (
+      prepared.extensions!.legacyStudio as LegacyStudioDocument
+    ).layers[0]!.rendering!;
+
+    expect(uploadTile).toHaveBeenCalledTimes(1);
+    expect(rendering.tiles[0]?.storagePath).toBe(
+      "user/proj/layer-0/0_0.png",
+    );
+    expect(rendering.tiles[0]?.blob).toBeUndefined();
+    expect(rendering.tiles[1]?.storagePath).toBe(
+      "user/proj/tile-existing.png",
+    );
+    expect(rendering.strokes).toMatchObject({
+      strokes: [{ id: "stroke-1" }],
+    });
+  });
 });

@@ -1,4 +1,3 @@
-"use strict";
 (() => {
   var __defProp = Object.defineProperty;
   var __typeError = (msg) => {
@@ -23,6 +22,116 @@
       return __privateGet(obj, member, getter);
     }
   });
+
+  // src/lib/scale-system.ts
+  var SCALE_UNITS = ["mm", "cm", "m", "in", "ft"];
+  var UNIT_MM = {
+    mm: 1,
+    cm: 10,
+    m: 1e3,
+    in: 25.4,
+    ft: 304.8
+  };
+  function millimetersPerUnit(unit) {
+    var _a2;
+    return (_a2 = UNIT_MM[unit]) != null ? _a2 : 1;
+  }
+  function createUnsetScaleCalibration(displayUnit = "cm") {
+    return {
+      version: 1,
+      status: "unset",
+      mmPerDocumentUnit: null,
+      method: null,
+      displayUnit,
+      reference: null
+    };
+  }
+  function calibrateFromReference(documentDistance, realDistance, unit) {
+    if (!Number.isFinite(documentDistance) || documentDistance <= 0) {
+      throw new Error("Reference line must have a positive document length");
+    }
+    if (!Number.isFinite(realDistance) || realDistance <= 0) {
+      throw new Error("Real-world reference length must be positive");
+    }
+    return {
+      version: 1,
+      status: "calibrated",
+      mmPerDocumentUnit: realDistance * millimetersPerUnit(unit) / documentDistance,
+      method: "reference-line",
+      displayUnit: unit,
+      reference: { documentDistance, realDistance, unit }
+    };
+  }
+  function calibrationFromLegacy(pxPerUnit, unit) {
+    if (!pxPerUnit || pxPerUnit <= 0) return createUnsetScaleCalibration();
+    const displayUnit = SCALE_UNITS.includes(unit) ? unit : "cm";
+    return {
+      version: 1,
+      status: "calibrated",
+      mmPerDocumentUnit: millimetersPerUnit(displayUnit) / pxPerUnit,
+      method: "reference-line",
+      displayUnit,
+      reference: null
+    };
+  }
+  function normalizeScaleCalibration(value, legacyPxPerUnit, legacyUnit) {
+    var _a2;
+    if ((value == null ? void 0 : value.status) === "calibrated" && Number.isFinite(value.mmPerDocumentUnit) && Number(value.mmPerDocumentUnit) > 0) {
+      const displayUnit = SCALE_UNITS.includes(value.displayUnit) ? value.displayUnit : "cm";
+      return {
+        version: 1,
+        status: "calibrated",
+        mmPerDocumentUnit: Number(value.mmPerDocumentUnit),
+        method: "reference-line",
+        displayUnit,
+        reference: (_a2 = value.reference) != null ? _a2 : null
+      };
+    }
+    return calibrationFromLegacy(legacyPxPerUnit, legacyUnit);
+  }
+  function hasCalibratedScale(calibration) {
+    return (calibration == null ? void 0 : calibration.status) === "calibrated" && Number.isFinite(calibration.mmPerDocumentUnit) && Number(calibration.mmPerDocumentUnit) > 0;
+  }
+  function documentUnitsToMillimeters(documentUnits, calibration) {
+    if (!hasCalibratedScale(calibration)) return null;
+    return documentUnits * Number(calibration.mmPerDocumentUnit);
+  }
+  function millimetersToDocumentUnits(millimeters, calibration) {
+    if (!hasCalibratedScale(calibration)) return null;
+    return millimeters / Number(calibration.mmPerDocumentUnit);
+  }
+  function pixelsPerLegacyUnit(calibration) {
+    if (!hasCalibratedScale(calibration)) return null;
+    return millimetersPerUnit(calibration.displayUnit) / Number(calibration.mmPerDocumentUnit);
+  }
+  function scaleDenominator(calibration, documentWidth, paperWidthMm) {
+    if (!hasCalibratedScale(calibration) || paperWidthMm <= 0) return null;
+    const documentUnitsPerPaperMm = documentWidth / paperWidthMm;
+    return Number(calibration.mmPerDocumentUnit) * documentUnitsPerPaperMm;
+  }
+  function semanticToolRequiresScale(tool) {
+    return tool === "wall";
+  }
+  function calibrationAnnotationMetrics(viewScale) {
+    const scale = Math.max(0.01, viewScale);
+    return {
+      extensionLength: 230 / scale,
+      labelOffset: 52 / scale,
+      tickLength: 14 / scale,
+      endpointRadius: 8 / scale,
+      extensionStrokeWidth: 1.5 / scale,
+      dimensionStrokeWidth: 2 / scale,
+      tickStrokeWidth: 2.5 / scale,
+      panelHeight: 44 / scale,
+      panelRadius: 8 / scale,
+      fontSize: 20 / scale,
+      labelBaselineOffset: 7 / scale,
+      minimumPanelWidth: 160 / scale,
+      panelHorizontalPadding: 36 / scale,
+      estimatedCharacterWidth: 13 / scale,
+      viewportMargin: 36
+    };
+  }
 
   // src/engine/app/scope.ts
   function computePx(wMM, hMM, dpi) {
@@ -67,6 +176,7 @@
     snapshot: null,
     pxPerUnit: null,
     scaleUnit: "cm",
+    scaleCalibration: createUnsetScaleCalibration(),
     measurements: [],
     showGrid: false,
     gridType: "square",
@@ -332,6 +442,7 @@
   };
   var ObjectCapabilityRegistry = class {
     constructor(seed = REGISTRY) {
+      __publicField(this, "map");
       this.map = new Map(Object.entries(seed));
     }
     get(type) {
@@ -375,8 +486,10 @@
   // src/engine/interaction/selection-manager.ts
   var SelectionManager = class {
     constructor(options = {}) {
-      this.state = createEmptySelectionState();
-      this.listeners = /* @__PURE__ */ new Set();
+      __publicField(this, "state", createEmptySelectionState());
+      __publicField(this, "listeners", /* @__PURE__ */ new Set());
+      __publicField(this, "capabilities");
+      __publicField(this, "canSelect");
       var _a2, _b;
       this.capabilities = (_a2 = options.capabilities) != null ? _a2 : capabilityRegistry;
       this.canSelect = (_b = options.canSelect) != null ? _b : (() => true);
@@ -921,7 +1034,12 @@
   // src/engine/layers/snap-engine.ts
   var SnapEngine = class {
     constructor(options = {}) {
-      this.targets = [];
+      __publicField(this, "enabled");
+      __publicField(this, "tolerancePx");
+      __publicField(this, "gridSpacing");
+      __publicField(this, "gridSnap");
+      __publicField(this, "objectSnap");
+      __publicField(this, "targets", []);
       var _a2, _b, _c, _d, _e;
       this.enabled = (_a2 = options.enabled) != null ? _a2 : true;
       this.tolerancePx = (_b = options.tolerancePx) != null ? _b : 8;
@@ -996,7 +1114,8 @@
   // src/engine/layers/transform-engine.ts
   var TransformEngine = class {
     constructor(options = {}) {
-      this.session = null;
+      __publicField(this, "session", null);
+      __publicField(this, "snap");
       var _a2;
       this.snap = (_a2 = options.snap) != null ? _a2 : null;
     }
@@ -1144,16 +1263,18 @@
   }
   var LayerEngine = class {
     constructor(options = {}) {
-      this.floors = {};
-      this.layers = {};
-      this.objects = {};
-      this.rootFloorIds = [];
-      this.activeFloorId = null;
-      this.activeLayerId = null;
-      this.mutationVersion = 0;
-      this._mainLayerId = null;
-      this._sketchLayerId = null;
-      this.listeners = /* @__PURE__ */ new Set();
+      __publicField(this, "floors", {});
+      __publicField(this, "layers", {});
+      __publicField(this, "objects", {});
+      __publicField(this, "rootFloorIds", []);
+      __publicField(this, "activeFloorId", null);
+      __publicField(this, "activeLayerId", null);
+      __publicField(this, "mutationVersion", 0);
+      __publicField(this, "_mainLayerId", null);
+      __publicField(this, "_sketchLayerId", null);
+      __publicField(this, "listeners", /* @__PURE__ */ new Set());
+      __publicField(this, "snap");
+      __publicField(this, "transform");
       var _a2, _b;
       this.snap = (_a2 = options.snap) != null ? _a2 : createSnapEngine();
       this.transform = (_b = options.transform) != null ? _b : createTransformEngine({ snap: this.snap });
@@ -1230,8 +1351,8 @@
       return (_b = (_a2 = Object.values(this.layers).find((l) => l.layerKind === "sketch")) == null ? void 0 : _a2.id) != null ? _b : null;
     }
     /**
-     * Drawable (raster) layer ids in paint order — bottom of stack first.
-     * Object-host layers like "Layer 1" are excluded; only sketch surfaces ink.
+     * Canvas-backed layer ids in paint order — bottom of stack first.
+     * Reference layers need a raster surface even though they are not drawable.
      */
     getRasterLayerIds() {
       const ids = [];
@@ -1239,7 +1360,9 @@
         for (const id of layerIds) {
           const layer = this.layers[id];
           if (!layer) continue;
-          if (getLayerCapabilities(layer.layerKind).canDraw) ids.push(id);
+          if (getLayerCapabilities(layer.layerKind).canDraw || layer.layerKind === "reference") {
+            ids.push(id);
+          }
           if (layer.childLayerIds.length) walk(layer.childLayerIds);
         }
       };
@@ -1255,7 +1378,7 @@
      * Returns engine ids aligned 1:1 with `legacyLayers` for surface allocation.
      */
     rebuildFromLegacyLayers(legacyLayers, activeIndex = 0) {
-      var _a2, _b;
+      var _a2, _b, _c, _d;
       this.floors = {};
       this.layers = {};
       this.objects = {};
@@ -1279,7 +1402,7 @@
         const id = this.createLayer({
           id: ld.layer_id,
           name: ld.name || `Layer ${i + 1}`,
-          layerKind: "sketch",
+          layerKind: (_b = ld.layerKind) != null ? _b : "sketch",
           floorId,
           visible: ld.visible !== false,
           locked: ld.locked,
@@ -1288,9 +1411,11 @@
         });
         const layer = this.layers[id];
         if (typeof ld.trace === "number") layer.trace = ld.trace;
-        layer.rasterPath = (_b = ld.raster_path) != null ? _b : null;
+        layer.rasterPath = (_c = ld.raster_path) != null ? _c : null;
         engineIds.push(id);
-        if (i === 0) this._sketchLayerId = id;
+        if (!this._sketchLayerId && layer.layerKind === "sketch") {
+          this._sketchLayerId = id;
+        }
       }
       if (engineIds.length === 0) {
         const sketchId = this.createLayer({
@@ -1303,7 +1428,11 @@
         return [];
       }
       const clamped = Math.max(0, Math.min(activeIndex, engineIds.length - 1));
-      this.setActiveLayer(engineIds[clamped]);
+      const requestedActive = engineIds[clamped];
+      const requestedLayer = this.layers[requestedActive];
+      this.setActiveLayer(
+        requestedLayer && getLayerCapabilities(requestedLayer.layerKind).canDraw ? requestedActive : (_d = this._sketchLayerId) != null ? _d : requestedActive
+      );
       return engineIds;
     }
     /* ───────── floors ───────── */
@@ -3011,8 +3140,10 @@
   // src/engine/brushes/library.ts
   var BrushLibrary = class {
     constructor(options = {}) {
-      this.favorites = /* @__PURE__ */ new Set();
-      this.recent = [];
+      __publicField(this, "builtins");
+      __publicField(this, "custom");
+      __publicField(this, "favorites", /* @__PURE__ */ new Set());
+      __publicField(this, "recent", []);
       var _a2;
       this.builtins = BUILTIN_BRUSH_PRESETS.map((b) => ({ ...b }));
       this.custom = ((_a2 = options.custom) != null ? _a2 : []).map((b) => ({ ...b }));
@@ -3200,6 +3331,8 @@
     INSPECTOR_TOOLS: () => INSPECTOR_TOOLS,
     MASSING_TOOLS: () => MASSING_TOOLS,
     MASSING_TOOL_HINTS: () => MASSING_TOOL_HINTS,
+    MAX_CANVAS_ZOOM: () => MAX_CANVAS_ZOOM,
+    MIN_CANVAS_ZOOM: () => MIN_CANVAS_ZOOM,
     SKETCH_BUILD_TOOLS: () => SKETCH_BUILD_TOOLS,
     SKETCH_DRAW_TOOLS: () => SKETCH_DRAW_TOOLS,
     activeRailHighlight: () => activeRailHighlight,
@@ -3307,7 +3440,9 @@
       bottom: y > docHeight - threshold
     };
   }
-  function clampZoom(zoom, min = 0.2, max = 8) {
+  var MIN_CANVAS_ZOOM = 0.2;
+  var MAX_CANVAS_ZOOM = 64;
+  function clampZoom(zoom, min = MIN_CANVAS_ZOOM, max = MAX_CANVAS_ZOOM) {
     return Math.max(min, Math.min(max, zoom));
   }
   function zoomIn(zoom, factor = 1.25) {
@@ -3355,7 +3490,7 @@
   function massingToolUsesSelection(tool) {
     return INSPECTOR_TOOLS.has(tool);
   }
-  var UNIT_MM = {
+  var UNIT_MM2 = {
     mm: 1,
     cm: 10,
     m: 1e3,
@@ -3364,7 +3499,7 @@
   };
   function scaleLabelFromPxPerUnit(pxPerUnit, scaleUnit, docWidthPx, docWidthMm) {
     if (!pxPerUnit || !scaleUnit || docWidthMm <= 0) return null;
-    const unitInMm = UNIT_MM[scaleUnit] || 1;
+    const unitInMm = UNIT_MM2[scaleUnit] || 1;
     const realPerPxMm = unitInMm / pxPerUnit;
     const docPxPerMm = docWidthPx / docWidthMm;
     const ratio = realPerPxMm * docPxPerMm;
@@ -3460,6 +3595,457 @@
     S.helpers = studio_helpers_exports;
     void loadBrushPresets();
   }
+
+  // src/engine/rendering/tile-store.ts
+  var DEFAULT_TILE_SIZE = 512;
+  function defaultCreateCanvas(width, height) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  }
+  function tileKey(column, row) {
+    return `${column}:${row}`;
+  }
+  function tilesForRect(rect, documentWidth, documentHeight, tileSize = DEFAULT_TILE_SIZE) {
+    const x0 = Math.max(0, Math.floor(rect.x));
+    const y0 = Math.max(0, Math.floor(rect.y));
+    const x1 = Math.min(documentWidth, Math.ceil(rect.x + rect.w));
+    const y1 = Math.min(documentHeight, Math.ceil(rect.y + rect.h));
+    if (x1 <= x0 || y1 <= y0) return [];
+    const firstColumn = Math.floor(x0 / tileSize);
+    const lastColumn = Math.floor((x1 - 1) / tileSize);
+    const firstRow = Math.floor(y0 / tileSize);
+    const lastRow = Math.floor((y1 - 1) / tileSize);
+    const result = [];
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      for (let column = firstColumn; column <= lastColumn; column += 1) {
+        const x = column * tileSize;
+        const y = row * tileSize;
+        result.push({
+          key: tileKey(column, row),
+          column,
+          row,
+          x,
+          y,
+          width: Math.min(tileSize, documentWidth - x),
+          height: Math.min(tileSize, documentHeight - y)
+        });
+      }
+    }
+    return result;
+  }
+  var RasterTileStore = class {
+    constructor(options) {
+      __publicField(this, "width");
+      __publicField(this, "height");
+      __publicField(this, "tileSize");
+      __publicField(this, "maxResidentTiles");
+      __publicField(this, "root");
+      __publicField(this, "createCanvas");
+      __publicField(this, "tiles", /* @__PURE__ */ new Map());
+      __publicField(this, "evicted", /* @__PURE__ */ new Map());
+      __publicField(this, "transactionBefore", null);
+      __publicField(this, "clock", 0);
+      var _a2, _b, _c, _d;
+      this.width = Math.max(1, Math.floor(options.width));
+      this.height = Math.max(1, Math.floor(options.height));
+      this.tileSize = Math.max(64, Math.floor((_a2 = options.tileSize) != null ? _a2 : DEFAULT_TILE_SIZE));
+      this.maxResidentTiles = Math.max(8, (_b = options.maxResidentTiles) != null ? _b : 96);
+      this.root = (_c = options.root) != null ? _c : null;
+      this.createCanvas = (_d = options.createCanvas) != null ? _d : defaultCreateCanvas;
+    }
+    get size() {
+      return this.tiles.size;
+    }
+    keys() {
+      return [.../* @__PURE__ */ new Set([...this.tiles.keys(), ...this.evicted.keys()])];
+    }
+    has(key) {
+      return this.tiles.has(key);
+    }
+    dropOutside(visible, force = false) {
+      const keep = new Set(
+        tilesForRect(visible, this.width, this.height, this.tileSize).map(
+          (tile) => tile.key
+        )
+      );
+      const candidates = [...this.tiles.values()].filter(
+        (tile) => !keep.has(tile.key) && (force || !tile.dirty && Boolean(tile.persistedBlob))
+      ).sort((a, b) => a.lastUsed - b.lastUsed);
+      let removed = 0;
+      for (const tile of candidates) {
+        if (!force && tile.persistedBlob) {
+          this.evicted.set(tile.key, {
+            descriptor: {
+              key: tile.key,
+              column: tile.column,
+              row: tile.row,
+              width: tile.width,
+              height: tile.height
+            },
+            blob: tile.persistedBlob
+          });
+        }
+        tile.canvas.remove();
+        tile.canvas.width = 1;
+        tile.canvas.height = 1;
+        this.tiles.delete(tile.key);
+        removed += 1;
+      }
+      return removed;
+    }
+    async ensureVisible(visible) {
+      for (const coordinate of tilesForRect(
+        visible,
+        this.width,
+        this.height,
+        this.tileSize
+      )) {
+        if (this.tiles.has(coordinate.key)) continue;
+        const backing = this.evicted.get(coordinate.key);
+        if (!backing) continue;
+        await this.importTile(backing.descriptor, backing.blob);
+        this.evicted.delete(coordinate.key);
+      }
+    }
+    createTile(coordinate) {
+      var _a2;
+      const canvas = this.createCanvas(coordinate.width, coordinate.height);
+      canvas.dataset.tileKey = coordinate.key;
+      canvas.style.position = "absolute";
+      canvas.style.left = `${coordinate.x}px`;
+      canvas.style.top = `${coordinate.y}px`;
+      canvas.style.width = `${coordinate.width}px`;
+      canvas.style.height = `${coordinate.height}px`;
+      canvas.style.pointerEvents = "none";
+      const context = canvas.getContext("2d", {
+        willReadFrequently: true
+      });
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      (_a2 = this.root) == null ? void 0 : _a2.appendChild(canvas);
+      const tile = {
+        ...coordinate,
+        canvas,
+        context,
+        dirty: false,
+        lastUsed: ++this.clock,
+        persistedBlob: null
+      };
+      this.tiles.set(coordinate.key, tile);
+      return tile;
+    }
+    getTile(coordinate, create = true) {
+      const existing = this.tiles.get(coordinate.key);
+      if (existing) {
+        existing.lastUsed = ++this.clock;
+        return existing;
+      }
+      return create ? this.createTile(coordinate) : null;
+    }
+    beginPatch() {
+      this.transactionBefore = /* @__PURE__ */ new Map();
+    }
+    forEachContext(rect, draw) {
+      for (const coordinate of tilesForRect(
+        rect,
+        this.width,
+        this.height,
+        this.tileSize
+      )) {
+        const tile = this.getTile(coordinate, true);
+        if (this.transactionBefore && !this.transactionBefore.has(coordinate.key)) {
+          this.transactionBefore.set(
+            coordinate.key,
+            tile.context.getImageData(0, 0, tile.width, tile.height)
+          );
+        }
+        tile.context.save();
+        tile.context.translate(-tile.x, -tile.y);
+        draw(tile.context, coordinate);
+        tile.context.restore();
+        tile.dirty = true;
+        tile.persistedBlob = null;
+      }
+    }
+    endPatch() {
+      const before = this.transactionBefore;
+      this.transactionBefore = null;
+      if (!before) return [];
+      const patches = [];
+      for (const [key, beforeImage] of before) {
+        const tile = this.tiles.get(key);
+        if (!tile) continue;
+        patches.push({
+          key,
+          column: tile.column,
+          row: tile.row,
+          x: tile.x,
+          y: tile.y,
+          width: tile.width,
+          height: tile.height,
+          before: beforeImage,
+          after: tile.context.getImageData(0, 0, tile.width, tile.height)
+        });
+      }
+      return patches;
+    }
+    cancelPatch() {
+      const before = this.transactionBefore;
+      this.transactionBefore = null;
+      if (!before) return;
+      for (const [key, image] of before) {
+        const tile = this.tiles.get(key);
+        if (tile) tile.context.putImageData(image, 0, 0);
+      }
+    }
+    applyPatches(patches, side) {
+      for (const patch of patches) {
+        const tile = this.getTile(patch, true);
+        tile.context.putImageData(patch[side], 0, 0);
+        tile.dirty = true;
+        tile.persistedBlob = null;
+      }
+    }
+    clear() {
+      this.beginPatch();
+      for (const tile of this.tiles.values()) {
+        if (!this.transactionBefore.has(tile.key)) {
+          this.transactionBefore.set(
+            tile.key,
+            tile.context.getImageData(0, 0, tile.width, tile.height)
+          );
+        }
+        tile.context.clearRect(0, 0, tile.width, tile.height);
+        tile.dirty = true;
+        tile.persistedBlob = null;
+      }
+      return this.endPatch();
+    }
+    drawTo(context, scale = 1, rect = { x: 0, y: 0, w: this.width, h: this.height }) {
+      const allowed = new Set(
+        tilesForRect(rect, this.width, this.height, this.tileSize).map(
+          (tile) => tile.key
+        )
+      );
+      for (const tile of this.tiles.values()) {
+        if (!allowed.has(tile.key)) continue;
+        context.drawImage(
+          tile.canvas,
+          tile.x * scale,
+          tile.y * scale,
+          tile.width * scale,
+          tile.height * scale
+        );
+      }
+    }
+    async drawAllTo(context, scale = 1) {
+      var _a2;
+      this.drawTo(context, scale);
+      for (const backing of this.evicted.values()) {
+        const bitmap = await createImageBitmap(backing.blob);
+        const x = backing.descriptor.column * this.tileSize;
+        const y = backing.descriptor.row * this.tileSize;
+        context.drawImage(
+          bitmap,
+          x * scale,
+          y * scale,
+          backing.descriptor.width * scale,
+          backing.descriptor.height * scale
+        );
+        (_a2 = bitmap.close) == null ? void 0 : _a2.call(bitmap);
+      }
+    }
+    async persistedTiles(dirtyOnly = false) {
+      var _a2;
+      const result = [];
+      for (const tile of this.tiles.values()) {
+        if (dirtyOnly && !tile.dirty) continue;
+        const blob = (_a2 = tile.persistedBlob) != null ? _a2 : await new Promise(
+          (resolve) => tile.canvas.toBlob(resolve, "image/png")
+        );
+        tile.persistedBlob = blob;
+        tile.dirty = false;
+        result.push({
+          key: tile.key,
+          column: tile.column,
+          row: tile.row,
+          width: tile.width,
+          height: tile.height,
+          blob
+        });
+      }
+      if (!dirtyOnly) {
+        for (const backing of this.evicted.values()) {
+          result.push({ ...backing.descriptor, blob: backing.blob });
+        }
+      }
+      return result;
+    }
+    /** Full manifest, but PNG bytes only for tiles changed since the prior save. */
+    async takeSaveManifest() {
+      const result = [];
+      for (const tile of this.tiles.values()) {
+        let blob = null;
+        if (tile.dirty || !tile.persistedBlob) {
+          blob = await new Promise(
+            (resolve) => tile.canvas.toBlob(resolve, "image/png")
+          );
+          tile.persistedBlob = blob;
+        }
+        result.push({
+          key: tile.key,
+          column: tile.column,
+          row: tile.row,
+          width: tile.width,
+          height: tile.height,
+          blob
+        });
+        tile.dirty = false;
+      }
+      return result;
+    }
+    async importTile(descriptor, source) {
+      var _a2;
+      const coordinate = {
+        key: descriptor.key || tileKey(descriptor.column, descriptor.row),
+        column: descriptor.column,
+        row: descriptor.row,
+        x: descriptor.column * this.tileSize,
+        y: descriptor.row * this.tileSize,
+        width: descriptor.width,
+        height: descriptor.height
+      };
+      const tile = this.getTile(coordinate, true);
+      const blob = typeof source === "string" ? await fetch(source, { credentials: "same-origin" }).then(
+        (response) => {
+          if (!response.ok) {
+            throw new Error("Tile source could not be loaded");
+          }
+          return response.blob();
+        }
+      ) : source;
+      const bitmap = await createImageBitmap(blob);
+      tile.context.clearRect(0, 0, tile.width, tile.height);
+      tile.context.drawImage(bitmap, 0, 0, tile.width, tile.height);
+      (_a2 = bitmap.close) == null ? void 0 : _a2.call(bitmap);
+      tile.persistedBlob = blob;
+      tile.dirty = false;
+    }
+    evictOutside(visible) {
+      const keep = new Set(
+        tilesForRect(visible, this.width, this.height, this.tileSize).map(
+          (tile) => tile.key
+        )
+      );
+      const candidates = [...this.tiles.values()].filter((tile) => !keep.has(tile.key) && !tile.dirty && tile.persistedBlob).sort((a, b) => a.lastUsed - b.lastUsed);
+      const excess = Math.max(0, this.tiles.size - this.maxResidentTiles);
+      let evicted = 0;
+      for (const tile of candidates.slice(0, excess)) {
+        this.evicted.set(tile.key, {
+          descriptor: {
+            key: tile.key,
+            column: tile.column,
+            row: tile.row,
+            width: tile.width,
+            height: tile.height
+          },
+          blob: tile.persistedBlob
+        });
+        tile.canvas.remove();
+        tile.canvas.width = 1;
+        tile.canvas.height = 1;
+        this.tiles.delete(tile.key);
+        evicted += 1;
+      }
+      return evicted;
+    }
+    dispose() {
+      for (const tile of this.tiles.values()) tile.canvas.remove();
+      this.tiles.clear();
+      this.evicted.clear();
+      this.transactionBefore = null;
+    }
+  };
+
+  // src/engine/rendering/vector-stroke-store.ts
+  function createStrokeId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    return `stroke-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  }
+  var VectorStrokeStore = class _VectorStrokeStore {
+    constructor(tileSize = DEFAULT_TILE_SIZE) {
+      __publicField(this, "tileSize");
+      __publicField(this, "strokes", /* @__PURE__ */ new Map());
+      __publicField(this, "tileIndex", /* @__PURE__ */ new Map());
+      this.tileSize = tileSize;
+    }
+    get size() {
+      return this.strokes.size;
+    }
+    add(input) {
+      var _a2, _b;
+      const stroke = {
+        ...input,
+        id: (_a2 = input.id) != null ? _a2 : createStrokeId(),
+        createdAt: (_b = input.createdAt) != null ? _b : Date.now()
+      };
+      this.strokes.set(stroke.id, stroke);
+      for (const tile of tilesForRect(
+        stroke.bounds,
+        Number.MAX_SAFE_INTEGER,
+        Number.MAX_SAFE_INTEGER,
+        this.tileSize
+      )) {
+        let ids = this.tileIndex.get(tile.key);
+        if (!ids) {
+          ids = /* @__PURE__ */ new Set();
+          this.tileIndex.set(tile.key, ids);
+        }
+        ids.add(stroke.id);
+      }
+      return stroke;
+    }
+    remove(id) {
+      const stroke = this.strokes.get(id);
+      if (!stroke) return null;
+      this.strokes.delete(id);
+      for (const ids of this.tileIndex.values()) ids.delete(id);
+      return stroke;
+    }
+    get(id) {
+      var _a2;
+      return (_a2 = this.strokes.get(id)) != null ? _a2 : null;
+    }
+    inTile(column, row) {
+      const ids = this.tileIndex.get(tileKey(column, row));
+      if (!ids) return [];
+      return [...ids].map((id) => this.strokes.get(id)).filter((stroke) => Boolean(stroke)).sort((a, b) => a.createdAt - b.createdAt);
+    }
+    all() {
+      return [...this.strokes.values()].sort((a, b) => a.createdAt - b.createdAt);
+    }
+    clear() {
+      this.strokes.clear();
+      this.tileIndex.clear();
+    }
+    serialize() {
+      return {
+        version: 1,
+        tileSize: this.tileSize,
+        strokes: this.all()
+      };
+    }
+    static fromSnapshot(snapshot) {
+      var _a2;
+      const store = new _VectorStrokeStore(snapshot.tileSize);
+      for (const stroke of (_a2 = snapshot.strokes) != null ? _a2 : []) store.add(stroke);
+      return store;
+    }
+  };
 
   // src/engine/app/state-init.ts
   function initState() {
@@ -3893,6 +4479,7 @@
       });
     }
     S.layerEngine = S.__layersApi ? S.__layersApi.createLayerEngine() : null;
+    S.__tileCoordinatesForRect = tilesForRect;
     S.layerSurfaces = /* @__PURE__ */ new Map();
     S.layerIdCounter = 1;
     S.surfaceByEngineId = function surfaceByEngineId(engineId) {
@@ -3926,9 +4513,29 @@
       state2.activeLayer = ai >= 0 ? ai : Math.max(0, next.length - 1);
     };
     S.allocateLayerSurface = function allocateLayerSurface(engineId, name) {
+      const engineLayer = S.layerEngine ? S.layerEngine.getLayer(engineId) : null;
+      const isReference = (engineLayer == null ? void 0 : engineLayer.layerKind) === "reference";
+      const tileRoot = document.createElement("div");
+      tileRoot.className = isReference ? "reference-layer-root" : "raster-tile-layer";
+      tileRoot.style.position = "absolute";
+      tileRoot.style.inset = "0";
+      tileRoot.style.width = "100%";
+      tileRoot.style.height = "100%";
+      tileRoot.style.pointerEvents = "none";
+      S.paper.insertBefore(tileRoot, S.rulerOverlay);
+      const rasterTileRoot = document.createElement("div");
+      const vectorTileRoot = document.createElement("div");
+      for (const root of [rasterTileRoot, vectorTileRoot]) {
+        root.style.position = "absolute";
+        root.style.inset = "0";
+        root.style.width = "100%";
+        root.style.height = "100%";
+        root.style.pointerEvents = "none";
+        tileRoot.appendChild(root);
+      }
       const imageCanvas = document.createElement("canvas");
-      imageCanvas.width = S.doc.wPx;
-      imageCanvas.height = S.doc.hPx;
+      imageCanvas.width = 1;
+      imageCanvas.height = 1;
       imageCanvas.style.position = "absolute";
       imageCanvas.style.inset = "0";
       imageCanvas.style.width = "100%";
@@ -3936,8 +4543,12 @@
       imageCanvas.style.pointerEvents = "none";
       S.paper.insertBefore(imageCanvas, S.rulerOverlay);
       const canvas = document.createElement("canvas");
-      canvas.width = S.doc.wPx;
-      canvas.height = S.doc.hPx;
+      canvas.width = 1;
+      canvas.height = 1;
+      canvas.style.position = "absolute";
+      canvas.style.inset = "0";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
       S.paper.insertBefore(canvas, S.rulerOverlay);
       const layer = {
         id: S.layerIdCounter++,
@@ -3945,6 +4556,23 @@
         name: name || "Layer",
         canvas,
         ctx: canvas.getContext("2d"),
+        tileRoot,
+        tileStore: isReference ? null : new RasterTileStore({
+          width: S.doc.wPx,
+          height: S.doc.hPx,
+          root: rasterTileRoot,
+          tileSize: 512,
+          maxResidentTiles: 96
+        }),
+        vectorTileStore: isReference ? null : new RasterTileStore({
+          width: S.doc.wPx,
+          height: S.doc.hPx,
+          root: vectorTileRoot,
+          tileSize: 512,
+          maxResidentTiles: 96
+        }),
+        strokeStore: isReference ? null : new VectorStrokeStore(512),
+        renderMode: isReference ? "reference" : "hybrid-tiled",
         imageCanvas,
         imageCtx: imageCanvas.getContext("2d"),
         visible: true,
@@ -3973,7 +4601,6 @@
       };
       layer.ctx.lineCap = "round";
       layer.ctx.lineJoin = "round";
-      layer._cur = layer.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
       S.layerSurfaces.set(engineId, layer);
       return layer;
     };
@@ -3986,6 +4613,26 @@
       }
       try {
         if (surf.imageCanvas) surf.imageCanvas.remove();
+      } catch (_) {
+      }
+      try {
+        if (surf.tileStore) surf.tileStore.dispose();
+      } catch (_) {
+      }
+      try {
+        if (surf.vectorTileStore) surf.vectorTileStore.dispose();
+      } catch (_) {
+      }
+      try {
+        if (surf.tileRoot) surf.tileRoot.remove();
+      } catch (_) {
+      }
+      try {
+        if (surf.imageElement) surf.imageElement.remove();
+      } catch (_) {
+      }
+      try {
+        if (surf.imagePyramid) surf.imagePyramid.dispose();
       } catch (_) {
       }
       try {
@@ -4215,6 +4862,47 @@
     ];
   }
 
+  // src/engine/app/scale.ts
+  function initScaleSystem() {
+    const state2 = S.state;
+    S.setScaleCalibration = function setScaleCalibration(value, legacyPxPerUnit, legacyUnit) {
+      state2.scaleCalibration = normalizeScaleCalibration(
+        value,
+        legacyPxPerUnit,
+        legacyUnit
+      );
+      state2.pxPerUnit = pixelsPerLegacyUnit(state2.scaleCalibration);
+      state2.scaleUnit = state2.scaleCalibration.displayUnit;
+      return state2.scaleCalibration;
+    };
+    S.clearScaleCalibration = function clearScaleCalibration() {
+      S.setScaleCalibration(createUnsetScaleCalibration());
+    };
+    S.hasCalibratedScale = function hasScale() {
+      return hasCalibratedScale(state2.scaleCalibration);
+    };
+    S.docUnitsToMM = function docUnitsToMM(value) {
+      return documentUnitsToMillimeters(value, state2.scaleCalibration);
+    };
+    S.mmToDocUnits = function mmToDocUnits(value) {
+      return millimetersToDocumentUnits(value, state2.scaleCalibration);
+    };
+    S.scaleDenominator = function currentScaleDenominator() {
+      return scaleDenominator(
+        state2.scaleCalibration,
+        S.doc.wPx,
+        S.doc.wMM
+      );
+    };
+    S.serializeScaleCalibration = function serializeScaleCalibration() {
+      return {
+        ...state2.scaleCalibration,
+        reference: state2.scaleCalibration.reference ? { ...state2.scaleCalibration.reference } : null
+      };
+    };
+    S.setScaleCalibration(null, state2.pxPerUnit, state2.scaleUnit);
+  }
+
   // src/engine/app/viewport.ts
   function initViewport() {
     const state2 = S.state;
@@ -4246,6 +4934,14 @@
       S.paper.style.transform = `translate(-50%, -50%) scale(${state2.zoom * state2.baseZoom})`;
       document.getElementById("zoom-level").textContent = Math.round(state2.zoom * 100) + "%";
       S.refreshMeasurements();
+      if (typeof S.schedulePdfRenders === "function") S.schedulePdfRenders();
+      if (typeof S.scheduleImageRenders === "function") S.scheduleImageRenders();
+      clearTimeout(S._tileCacheTimer);
+      S._tileCacheTimer = setTimeout(() => {
+        if (typeof S.refreshVectorTileCaches === "function") {
+          S.refreshVectorTileCaches();
+        }
+      }, 140);
     };
     S.fitToScreen = function fitToScreen() {
       const areaRect = S.area.getBoundingClientRect();
@@ -33074,6 +33770,185 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     XfaLayer
   };
 
+  // src/engine/rendering/image-pyramid-renderer.ts
+  var ImagePyramidRenderer = class {
+    constructor(options) {
+      __publicField(this, "options");
+      __publicField(this, "tiles", /* @__PURE__ */ new Map());
+      __publicField(this, "generation", 0);
+      __publicField(this, "clock", 0);
+      this.options = options;
+    }
+    levelScale(transform) {
+      const sourcePerDocumentPixel = Math.min(
+        this.options.image.naturalWidth / Math.max(1, transform.w),
+        this.options.image.naturalHeight / Math.max(1, transform.h)
+      );
+      const requested = Math.max(
+        0.125,
+        this.options.getScreenScale() * Math.min(2, devicePixelRatio || 1)
+      );
+      const quantized = 2 ** Math.ceil(Math.log2(requested));
+      return Math.max(0.125, Math.min(sourcePerDocumentPixel, quantized));
+    }
+    async refresh() {
+      var _a2, _b;
+      const transform = this.options.getTransform();
+      if (!transform || Math.abs((transform.rotation || 0) % 360) > 1e-3) {
+        this.setVisible(false);
+        return;
+      }
+      this.setVisible(true);
+      const imageBounds = {
+        x: transform.x - transform.w / 2,
+        y: transform.y - transform.h / 2,
+        w: transform.w,
+        h: transform.h
+      };
+      const viewport = this.options.getVisibleRect();
+      const x0 = Math.max(imageBounds.x, viewport.x);
+      const y0 = Math.max(imageBounds.y, viewport.y);
+      const x1 = Math.min(imageBounds.x + imageBounds.w, viewport.x + viewport.w);
+      const y1 = Math.min(imageBounds.y + imageBounds.h, viewport.y + viewport.h);
+      if (x1 <= x0 || y1 <= y0) {
+        for (const tile of this.tiles.values()) tile.canvas.style.display = "none";
+        return;
+      }
+      const generation = ++this.generation;
+      const tileSize = (_a2 = this.options.tileSize) != null ? _a2 : 512;
+      const scale = this.levelScale(transform);
+      const level = Math.round(Math.log2(scale) * 8);
+      const visibleKeys = /* @__PURE__ */ new Set();
+      const documentWidth = Math.ceil(
+        Math.max(imageBounds.x + imageBounds.w, viewport.x + viewport.w)
+      );
+      const documentHeight = Math.ceil(
+        Math.max(imageBounds.y + imageBounds.h, viewport.y + viewport.h)
+      );
+      const coordinates = tilesForRect(
+        { x: x0, y: y0, w: x1 - x0, h: y1 - y0 },
+        documentWidth,
+        documentHeight,
+        tileSize
+      );
+      await Promise.all(
+        coordinates.map(async (coordinate) => {
+          var _a3, _b2;
+          const dx0 = Math.max(coordinate.x, imageBounds.x);
+          const dy0 = Math.max(coordinate.y, imageBounds.y);
+          const dx1 = Math.min(
+            coordinate.x + coordinate.width,
+            imageBounds.x + imageBounds.w
+          );
+          const dy1 = Math.min(
+            coordinate.y + coordinate.height,
+            imageBounds.y + imageBounds.h
+          );
+          if (dx1 <= dx0 || dy1 <= dy0) return;
+          const key = `${level}:${coordinate.key}`;
+          visibleKeys.add(key);
+          const cached = this.tiles.get(key);
+          if (cached) {
+            cached.lastUsed = ++this.clock;
+            cached.canvas.style.display = "block";
+            return;
+          }
+          const sx = Math.max(
+            0,
+            Math.floor(
+              (dx0 - imageBounds.x) / imageBounds.w * this.options.image.naturalWidth
+            )
+          );
+          const sy = Math.max(
+            0,
+            Math.floor(
+              (dy0 - imageBounds.y) / imageBounds.h * this.options.image.naturalHeight
+            )
+          );
+          const sw = Math.max(
+            1,
+            Math.ceil(
+              (dx1 - dx0) / imageBounds.w * this.options.image.naturalWidth
+            )
+          );
+          const sh = Math.max(
+            1,
+            Math.ceil(
+              (dy1 - dy0) / imageBounds.h * this.options.image.naturalHeight
+            )
+          );
+          const width = Math.max(1, Math.ceil((dx1 - dx0) * scale));
+          const height = Math.max(1, Math.ceil((dy1 - dy0) * scale));
+          const bitmap = await createImageBitmap(
+            this.options.image,
+            sx,
+            sy,
+            Math.min(sw, this.options.image.naturalWidth - sx),
+            Math.min(sh, this.options.image.naturalHeight - sy),
+            { resizeWidth: width, resizeHeight: height, resizeQuality: "high" }
+          );
+          if (generation !== this.generation) {
+            (_a3 = bitmap.close) == null ? void 0 : _a3.call(bitmap);
+            return;
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          canvas.style.position = "absolute";
+          canvas.style.left = `${dx0}px`;
+          canvas.style.top = `${dy0}px`;
+          canvas.style.width = `${dx1 - dx0}px`;
+          canvas.style.height = `${dy1 - dy0}px`;
+          canvas.style.pointerEvents = "none";
+          canvas.getContext("2d").drawImage(bitmap, 0, 0);
+          (_b2 = bitmap.close) == null ? void 0 : _b2.call(bitmap);
+          this.options.root.appendChild(canvas);
+          this.tiles.set(key, { key, canvas, lastUsed: ++this.clock });
+        })
+      );
+      for (const [key, tile] of this.tiles) {
+        tile.canvas.style.display = visibleKeys.has(key) ? "block" : "none";
+      }
+      const maxTiles = (_b = this.options.maxTiles) != null ? _b : 64;
+      const excess = this.tiles.size - maxTiles;
+      if (excess > 0) {
+        const removable = [...this.tiles.values()].filter((tile) => !visibleKeys.has(tile.key)).sort((a, b) => a.lastUsed - b.lastUsed).slice(0, excess);
+        for (const tile of removable) {
+          tile.canvas.remove();
+          this.tiles.delete(tile.key);
+        }
+      }
+    }
+    setVisible(visible) {
+      this.options.root.style.display = visible ? "block" : "none";
+    }
+    dispose() {
+      this.generation += 1;
+      for (const tile of this.tiles.values()) tile.canvas.remove();
+      this.tiles.clear();
+    }
+  };
+
+  // src/engine/rendering/reference-render-policy.ts
+  function rectContains(outer, inner, epsilon = 0.01) {
+    if (!outer || !inner) return false;
+    return inner.x >= outer.x - epsilon && inner.y >= outer.y - epsilon && inner.x + inner.w <= outer.x + outer.w + epsilon && inner.y + inner.h <= outer.y + outer.h + epsilon;
+  }
+  function shouldReuseReferenceRender(options) {
+    const {
+      renderedBox,
+      visibleBox,
+      renderedPixelsPerUnit = 0,
+      targetPixelsPerUnit = 0,
+      minimumScaleRatio = 0.9,
+      maximumScaleRatio = 1.5
+    } = options;
+    if (!rectContains(renderedBox, visibleBox)) return false;
+    if (renderedPixelsPerUnit <= 0 || targetPixelsPerUnit <= 0) return false;
+    const ratio = renderedPixelsPerUnit / targetPixelsPerUnit;
+    return ratio >= minimumScaleRatio && ratio <= maximumScaleRatio;
+  }
+
   // src/engine/app/layers.ts
   function initLayers() {
     const state2 = S.state;
@@ -33113,7 +33988,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.renderLayers();
       return layer;
     };
-    S.importDataUrlAsLayer = function importDataUrlAsLayer(dataUrl, name, replaceLayer) {
+    S.importDataUrlAsLayer = function importDataUrlAsLayer(dataUrl, name, replaceLayer, options = {}) {
       return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
@@ -33140,7 +34015,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           }
           const aspect = img.naturalWidth / img.naturalHeight;
           let w, h;
-          if (S.doc.wPx / S.doc.hPx > aspect) {
+          if (options.fitCanvas) {
+            w = S.doc.wPx;
+            h = S.doc.hPx;
+          } else if (S.doc.wPx / S.doc.hPx > aspect) {
             h = S.doc.hPx * 0.9;
             w = h * aspect;
           } else {
@@ -33164,7 +34042,9 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           S.updateLayerOrder();
           S.renderLayers();
           S.updateUI();
-          S.showHint("Image imported as layer \xB7 drag to move, corners to scale, top handle to rotate");
+          if (!options.suppressHint) {
+            S.showHint("Image imported as layer \xB7 drag to move, corners to scale, top handle to rotate");
+          }
           S.scheduleAutosave();
           resolve(targetLayer);
         };
@@ -33185,6 +34065,39 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       if (!response.ok) throw new Error(await response.text());
       return response.json();
     };
+    S.uploadImageAsset = async function uploadImageAsset(blob) {
+      const pid = typeof window !== "undefined" ? window.__SKETCHTRUDE_PROJECT_ID : null;
+      if (!pid || pid === "local" || !blob) return null;
+      const form = new FormData();
+      form.append("file", blob, blob.name || "reference.png");
+      const response = await fetch(`/api/projects/${pid}/assets/image`, {
+        method: "POST",
+        body: form,
+        credentials: "same-origin"
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    };
+    S.loadImageReferenceRuntime = async function loadImageReferenceRuntime(layer, source) {
+      const objectUrl = source instanceof Blob ? URL.createObjectURL(source) : source;
+      try {
+        const image = new Image();
+        image.decoding = "async";
+        await new Promise((resolve, reject) => {
+          image.onload = () => resolve();
+          image.onerror = () => reject(new Error("Image reference could not be decoded"));
+          image.src = objectUrl;
+        });
+        layer.image = image;
+        layer.imageSource = objectUrl;
+        layer.imageBaked = false;
+        S.renderImageCanvas(layer);
+      } finally {
+        if (source instanceof Blob) {
+          URL.revokeObjectURL(objectUrl);
+        }
+      }
+    };
     S.ensurePdfCanvas = function ensurePdfCanvas(layer) {
       if (layer.pdfCanvas) return layer.pdfCanvas;
       const canvas = document.createElement("canvas");
@@ -33201,64 +34114,142 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       if (!layer.pdfCanvas || !layer.imageTransform) return;
       const t = layer.imageTransform;
       const canvas = layer.pdfCanvas;
-      canvas.style.left = `${t.x - t.w / 2}px`;
-      canvas.style.top = `${t.y - t.h / 2}px`;
-      canvas.style.width = `${t.w}px`;
-      canvas.style.height = `${t.h}px`;
-      canvas.style.transform = `rotate(${t.rotation || 0}deg)`;
+      if (layer.pdfRenderBox) {
+        const box = layer.pdfRenderBox;
+        canvas.style.left = `${box.x}px`;
+        canvas.style.top = `${box.y}px`;
+        canvas.style.width = `${box.w}px`;
+        canvas.style.height = `${box.h}px`;
+        canvas.style.transform = "none";
+      } else {
+        canvas.style.left = `${t.x - t.w / 2}px`;
+        canvas.style.top = `${t.y - t.h / 2}px`;
+        canvas.style.width = `${t.w}px`;
+        canvas.style.height = `${t.h}px`;
+        canvas.style.transform = `rotate(${t.rotation || 0}deg)`;
+      }
       canvas.style.opacity = layer.visible === false ? "0" : String(((_a2 = layer.opacity) != null ? _a2 : 1) * ((_b = layer.imageOpacity) != null ? _b : 1));
     };
-    S.pdfTargetSize = function pdfTargetSize(layer) {
+    S.pdfRenderPlan = function pdfRenderPlan(layer) {
       const t = layer.imageTransform;
       const pdf = layer.pdf;
       if (!t || !pdf) return null;
       const screenScale = Math.max(0.01, (state2.zoom || 1) * (state2.baseZoom || 1));
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      let width = Math.max(1, Math.ceil(t.w * screenScale * dpr));
-      let height = Math.max(1, Math.ceil(t.h * screenScale * dpr));
-      const sideScale = Math.min(1, 8192 / Math.max(width, height));
-      const areaScale = Math.min(1, Math.sqrt(24 * 1024 * 1024 / Math.max(1, width * height)));
+      const rotation = Math.abs((t.rotation || 0) % 360);
+      let box = { x: t.x - t.w / 2, y: t.y - t.h / 2, w: t.w, h: t.h };
+      let visibleBox = box;
+      if (rotation < 1e-3 && S.area && typeof S.clientToCanvas === "function") {
+        const area = S.area.getBoundingClientRect();
+        const a = S.clientToCanvas(area.left, area.top);
+        const b = S.clientToCanvas(area.right, area.bottom);
+        const vx0 = Math.min(a.x, b.x);
+        const vy0 = Math.min(a.y, b.y);
+        const vx1 = Math.max(a.x, b.x);
+        const vy1 = Math.max(a.y, b.y);
+        const visibleX0 = Math.max(box.x, vx0);
+        const visibleY0 = Math.max(box.y, vy0);
+        const visibleX1 = Math.min(box.x + box.w, vx1);
+        const visibleY1 = Math.min(box.y + box.h, vy1);
+        if (visibleX1 <= visibleX0 || visibleY1 <= visibleY0) return null;
+        visibleBox = {
+          x: visibleX0,
+          y: visibleY0,
+          w: visibleX1 - visibleX0,
+          h: visibleY1 - visibleY0
+        };
+        const overscanScreenPx = Math.min(
+          384,
+          Math.max(160, Math.min(area.width, area.height) * 0.3)
+        );
+        const margin = overscanScreenPx / screenScale;
+        const x0 = Math.max(box.x, visibleX0 - margin);
+        const y0 = Math.max(box.y, visibleY0 - margin);
+        const x1 = Math.min(box.x + box.w, visibleX1 + margin);
+        const y1 = Math.min(box.y + box.h, visibleY1 + margin);
+        if (x1 <= x0 || y1 <= y0) return null;
+        box = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+      }
+      let width = Math.max(1, Math.ceil(box.w * screenScale * dpr));
+      let height = Math.max(1, Math.ceil(box.h * screenScale * dpr));
+      const sideScale = Math.min(1, 6144 / Math.max(width, height));
+      const areaScale = Math.min(1, Math.sqrt(16 * 1024 * 1024 / Math.max(1, width * height)));
       const limit = Math.min(sideScale, areaScale);
       width = Math.max(1, Math.floor(width * limit));
       height = Math.max(1, Math.floor(height * limit));
-      return { width, height };
+      const fullLeft = t.x - t.w / 2;
+      const fullTop = t.y - t.h / 2;
+      return {
+        width,
+        height,
+        box,
+        visibleBox,
+        pixelsPerUnit: width / Math.max(1, box.w),
+        pageX: (box.x - fullLeft) / t.w * pdf.pageWidth,
+        pageY: (box.y - fullTop) / t.h * pdf.pageHeight,
+        pageScale: width / box.w * (t.w / pdf.pageWidth),
+        rotation
+      };
     };
     S.renderPdfLayer = async function renderPdfLayer(layer, force) {
       if (!layer.pdfPage || !layer.pdf || !layer.imageTransform || layer.visible === false) return;
-      const target = S.pdfTargetSize(layer);
+      const target = S.pdfRenderPlan(layer);
       if (!target) return;
-      if (!force && layer.pdfRenderedWidth && Math.abs(target.width - layer.pdfRenderedWidth) / Math.max(1, layer.pdfRenderedWidth) < 0.22) {
+      if (!force && shouldReuseReferenceRender({
+        renderedBox: layer.pdfRenderBox,
+        visibleBox: target.visibleBox,
+        renderedPixelsPerUnit: layer.pdfRenderedPixelsPerUnit,
+        targetPixelsPerUnit: target.pixelsPerUnit
+      })) {
         S.updatePdfCanvasStyle(layer);
         return;
       }
-      try {
-        if (layer.pdfRenderTask) layer.pdfRenderTask.cancel();
-      } catch (_) {
+      if (layer.pdfRenderTask) {
+        layer.pdfRenderQueued = true;
+        return;
       }
       const generation = (layer.pdfRenderGeneration || 0) + 1;
       layer.pdfRenderGeneration = generation;
-      const scale = target.width / Math.max(1, layer.pdf.pageWidth);
-      const viewport = layer.pdfPage.getViewport({ scale });
+      const viewport = layer.pdfPage.getViewport({ scale: target.pageScale });
       const temp = document.createElement("canvas");
-      temp.width = Math.max(1, Math.ceil(viewport.width));
-      temp.height = Math.max(1, Math.ceil(viewport.height));
+      temp.width = target.width;
+      temp.height = target.height;
       const context = temp.getContext("2d");
       context.fillStyle = "#ffffff";
       context.fillRect(0, 0, temp.width, temp.height);
-      const task = layer.pdfPage.render({ canvas: temp, canvasContext: context, viewport });
+      const transform = target.rotation < 1e-3 ? [1, 0, 0, 1, -target.pageX * target.pageScale, -target.pageY * target.pageScale] : void 0;
+      const task = layer.pdfPage.render({
+        canvas: temp,
+        canvasContext: context,
+        viewport,
+        transform
+      });
       layer.pdfRenderTask = task;
       try {
         await task.promise;
         if (generation !== layer.pdfRenderGeneration) return;
+        const latestTarget = S.pdfRenderPlan(layer);
+        const usefulForLatestViewport = !latestTarget || target.rotation >= 1e-3 || rectContains(target.box, latestTarget.visibleBox);
         const canvas = S.ensurePdfCanvas(layer);
-        canvas.width = temp.width;
-        canvas.height = temp.height;
-        canvas.getContext("2d").drawImage(temp, 0, 0);
-        layer.pdfRenderedWidth = target.width;
-        layer.pdfRenderTask = null;
-        S.updatePdfCanvasStyle(layer);
+        if (usefulForLatestViewport || !layer.pdfRenderedWidth) {
+          canvas.width = temp.width;
+          canvas.height = temp.height;
+          canvas.getContext("2d").drawImage(temp, 0, 0);
+          layer.pdfRenderedWidth = target.width;
+          layer.pdfRenderedPixelsPerUnit = target.pixelsPerUnit;
+          layer.pdfRenderBox = target.rotation < 1e-3 ? target.box : null;
+          canvas.style.display = "block";
+          S.updatePdfCanvasStyle(layer);
+        }
       } catch (error) {
         if ((error == null ? void 0 : error.name) !== "RenderingCancelledException") console.warn("PDF render failed", error);
+      } finally {
+        layer.pdfRenderTask = null;
+        const queued = layer.pdfRenderQueued;
+        layer.pdfRenderQueued = false;
+        if (queued) {
+          requestAnimationFrame(() => S.renderPdfLayer(layer, false));
+        }
       }
     };
     S.loadPdfRuntime = async function loadPdfRuntime(layer, source) {
@@ -33279,23 +34270,48 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       await S.renderPdfLayer(layer, true);
     };
     S._pdfRenderTimer = null;
+    S._pdfRenderThrottleTimer = null;
+    S._pdfRenderFrame = null;
+    S._pdfRenderLastAt = 0;
     S.schedulePdfRenders = function schedulePdfRenders() {
-      clearTimeout(S._pdfRenderTimer);
-      S._pdfRenderTimer = setTimeout(() => {
+      const renderVisibleLayers = () => {
+        S._pdfRenderFrame = null;
+        S._pdfRenderLastAt = performance.now();
         (state2.layers || []).forEach((layer) => {
           if (layer.pdf) S.renderPdfLayer(layer, false);
         });
-      }, 160);
+      };
+      const requestRenderFrame = () => {
+        if (S._pdfRenderFrame !== null) return;
+        S._pdfRenderFrame = requestAnimationFrame(renderVisibleLayers);
+      };
+      const elapsed = performance.now() - S._pdfRenderLastAt;
+      if (elapsed >= 48) {
+        clearTimeout(S._pdfRenderThrottleTimer);
+        requestRenderFrame();
+      } else if (!S._pdfRenderThrottleTimer) {
+        S._pdfRenderThrottleTimer = setTimeout(() => {
+          S._pdfRenderThrottleTimer = null;
+          requestRenderFrame();
+        }, Math.max(0, 48 - elapsed));
+      }
+      clearTimeout(S._pdfRenderTimer);
+      S._pdfRenderTimer = setTimeout(() => {
+        requestRenderFrame();
+      }, 96);
     };
-    S.importPdfAsLayer = async function importPdfAsLayer(file, replaceLayer) {
+    S.importPdfAsLayer = async function importPdfAsLayer(file, replaceLayer, options = {}) {
       try {
         S.showHint("Opening PDF\u2026");
         if (file.size > 50 * 1024 * 1024) throw new Error("PDF exceeds the 50 MiB limit");
         const pdfBlob = file.slice(0, file.size, "application/pdf");
         const bytes = new Uint8Array(await pdfBlob.arrayBuffer());
         const pdf = await getDocument({ data: bytes }).promise;
-        let pageNumber = 1;
-        if (pdf.numPages > 1) {
+        let pageNumber = Math.max(
+          1,
+          Math.min(pdf.numPages, Math.round(Number(options.pageNumber) || 1))
+        );
+        if (!options.pageNumber && pdf.numPages > 1) {
           const answer = window.prompt(`This PDF has ${pdf.numPages} pages. Which page should be imported?`, "1");
           if (answer == null) return;
           pageNumber = Math.max(1, Math.min(pdf.numPages, Math.round(Number(answer) || 1)));
@@ -33314,7 +34330,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const layer = await S.importDataUrlAsLayer(
           canvas.toDataURL("image/png"),
           `${baseName} p${pageNumber}`,
-          replaceLayer
+          replaceLayer,
+          options
         );
         layer.pdf = {
           storagePath: null,
@@ -33341,32 +34358,112 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           S.scheduleAutosave();
         }).catch((error) => console.warn("PDF cloud upload deferred", error));
         S.scheduleAutosave();
-        S.showHint(`PDF page ${pageNumber} imported as layer`);
+        if (!options.suppressHint) S.showHint(`PDF page ${pageNumber} imported as layer`);
+        return layer;
       } catch (error) {
         console.warn("PDF import failed", error);
         S.showHint("PDF import failed \xB7 try a different file");
+        if (options.throwOnError) throw error;
+        return null;
       }
     };
-    S.importImageAsLayer = function importImageAsLayer(file, replaceLayer) {
+    S.importImageAsLayer = function importImageAsLayer(file, replaceLayer, options = {}) {
       if (!replaceLayer && state2.replaceImageInLayer) {
         replaceLayer = state2.replaceImageInLayer;
         state2.replaceImageInLayer = null;
       }
       if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
-        return S.importPdfAsLayer(file, replaceLayer);
+        return S.importPdfAsLayer(file, replaceLayer, options);
       }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        S.importDataUrlAsLayer(
-          ev.target.result,
-          file.name.replace(/\.[^.]+$/, "") || "Image",
-          replaceLayer
-        ).catch((error) => {
-          console.warn("Image import failed", error);
-          S.showHint("Image import failed \xB7 try a different file");
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          S.importDataUrlAsLayer(
+            ev.target.result,
+            file.name.replace(/\.[^.]+$/, "") || "Image",
+            replaceLayer,
+            options
+          ).then((layer) => {
+            var _a2, _b, _c;
+            if (layer.renderMode === "reference") {
+              layer.imageBlob = file.slice(0, file.size, file.type);
+              layer.imageReference = {
+                storagePath: null,
+                originalName: file.name,
+                mimeType: file.type,
+                byteSize: file.size,
+                pixelWidth: ((_a2 = layer.image) == null ? void 0 : _a2.naturalWidth) || 0,
+                pixelHeight: ((_b = layer.image) == null ? void 0 : _b.naturalHeight) || 0,
+                transform: { ...layer.imageTransform },
+                opacity: (_c = layer.imageOpacity) != null ? _c : 1
+              };
+              S.uploadImageAsset(file).then((asset) => {
+                if (!asset || !layer.imageReference) return;
+                layer.imageReference.storagePath = asset.storagePath;
+                layer.imageUrl = asset.signedUrl;
+                S.scheduleAutosave();
+              }).catch((error) => console.warn("Image cloud upload deferred", error));
+            }
+            resolve(layer);
+          }).catch((error) => {
+            console.warn("Image import failed", error);
+            S.showHint("Image import failed \xB7 try a different file");
+            reject(error);
+          });
+        };
+        reader.onerror = () => reject(new Error("The image file could not be read"));
+        reader.readAsDataURL(file);
+      });
+    };
+    S.importCanvasSource = async function importCanvasSource(file, options = {}) {
+      var _a2, _b, _c;
+      if (!file) throw new Error("Missing canvas source");
+      const sourceId = String(options.sourceId || "");
+      const existing = sourceId ? (state2.layers || []).find((layer) => layer.canvasSourceId === sourceId) : null;
+      if (existing) return existing;
+      const activeSurface = S.activeLayer();
+      const activeEngineId = (activeSurface == null ? void 0 : activeSurface.engineId) || ((_b = (_a2 = S.layerEngine) == null ? void 0 : _a2.getSketchLayerId) == null ? void 0 : _b.call(_a2));
+      const baseName = String(file.name || "Reference").replace(/\.[^.]+$/, "").slice(0, 48);
+      const sourceName = `${options.kind === "pdf" ? "PDF" : "Image"} \xB7 ${baseName || "Reference"}`;
+      const reference = S.createLayer(sourceName, {
+        layerKind: "reference",
+        locked: true,
+        insertAt: 0
+      });
+      reference.canvasSourceId = sourceId || null;
+      try {
+        const imported = await S.importImageAsLayer(file, reference, {
+          fitCanvas: true,
+          pageNumber: options.pageNumber || 1,
+          suppressHint: true,
+          throwOnError: true
         });
-      };
-      reader.readAsDataURL(file);
+        if (!imported) throw new Error("The canvas source could not be imported");
+      } catch (error) {
+        if (reference.engineId && S.layerEngine) {
+          S.disposeLayerSurface(reference.engineId);
+          S.layerEngine.deleteLayers([reference.engineId]);
+          S.syncStateLayersFromEngine();
+        }
+        throw error;
+      }
+      if (reference.engineId && S.layerEngine) {
+        const meta = S.layerEngine.getLayer(reference.engineId);
+        if (meta) {
+          meta.layerKind = "reference";
+          meta.locked = true;
+        }
+      }
+      if (activeEngineId && ((_c = S.layerEngine) == null ? void 0 : _c.getLayer(activeEngineId))) {
+        S.layerEngine.setActiveLayer(activeEngineId);
+        S.syncStateLayersFromEngine();
+      }
+      S.updateLayerOrder();
+      S.renderLayers();
+      S.updateUI();
+      S.scheduleAutosave();
+      S.showHint("Canvas source added as a locked Reference layer");
+      return reference;
     };
     S.workingImage = function workingImage(layer) {
       if (layer.imageCrop) return layer.image;
@@ -33385,13 +34482,77 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return wc;
     };
     S.renderImageCanvas = function renderImageCanvas(layer) {
-      var _a2;
+      var _a2, _b, _c, _d, _e, _f, _g, _h, _i;
+      if (layer.renderMode === "reference" && !layer.pdf) {
+        if (!layer.imageElement) {
+          const element2 = document.createElement("img");
+          element2.className = "image-reference-layer";
+          element2.draggable = false;
+          element2.style.position = "absolute";
+          element2.style.pointerEvents = "none";
+          element2.style.transformOrigin = "center center";
+          (_a2 = layer.tileRoot) == null ? void 0 : _a2.appendChild(element2);
+          layer.imageElement = element2;
+        }
+        const element = layer.imageElement;
+        const t2 = layer.imageTransform;
+        if (!layer.image || !t2 || layer.imageBaked) {
+          element.style.display = "none";
+          return;
+        }
+        if (!layer.imagePyramid || layer._imagePyramidSource !== layer.image) {
+          (_c = (_b = layer.imagePyramid) == null ? void 0 : _b.dispose) == null ? void 0 : _c.call(_b);
+          const pyramidRoot = document.createElement("div");
+          pyramidRoot.className = "image-pyramid-layer";
+          pyramidRoot.style.position = "absolute";
+          pyramidRoot.style.inset = "0";
+          pyramidRoot.style.pointerEvents = "none";
+          (_d = layer.tileRoot) == null ? void 0 : _d.appendChild(pyramidRoot);
+          layer.imagePyramidRoot = pyramidRoot;
+          layer._imagePyramidSource = layer.image;
+          layer.imagePyramid = new ImagePyramidRenderer({
+            root: pyramidRoot,
+            image: layer.image,
+            getTransform: () => layer.imageTransform,
+            getScreenScale: () => Math.max(0.01, state2.zoom * state2.baseZoom),
+            getVisibleRect: () => {
+              const area = S.area.getBoundingClientRect();
+              const a = S.clientToCanvas(area.left, area.top);
+              const b = S.clientToCanvas(area.right, area.bottom);
+              return {
+                x: Math.min(a.x, b.x),
+                y: Math.min(a.y, b.y),
+                w: Math.abs(b.x - a.x),
+                h: Math.abs(b.y - a.y)
+              };
+            },
+            maxTiles: 64
+          });
+        }
+        const usePyramid = Math.abs((t2.rotation || 0) % 360) < 1e-3;
+        (_f = (_e = layer.imagePyramid) == null ? void 0 : _e.setVisible) == null ? void 0 : _f.call(_e, usePyramid && layer.visible !== false);
+        if (usePyramid) {
+          element.style.display = "none";
+          layer.imagePyramidRoot.style.opacity = String((_g = layer.imageOpacity) != null ? _g : 1);
+          layer.imagePyramid.refresh().catch((error) => console.warn("Image pyramid refresh failed", error));
+          return;
+        }
+        if (element.src !== layer.image.src) element.src = layer.image.src;
+        element.style.display = layer.visible === false ? "none" : "block";
+        element.style.left = `${t2.x - t2.w / 2}px`;
+        element.style.top = `${t2.y - t2.h / 2}px`;
+        element.style.width = `${t2.w}px`;
+        element.style.height = `${t2.h}px`;
+        element.style.opacity = String((_h = layer.imageOpacity) != null ? _h : 1);
+        element.style.transform = `rotate(${t2.rotation || 0}deg)`;
+        return;
+      }
       const ctx = layer.imageCtx;
       ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
       if (!layer.image || layer.imageBaked) return;
       if (layer.pdf) {
         layer.pdf.transform = { ...layer.imageTransform };
-        layer.pdf.opacity = (_a2 = layer.imageOpacity) != null ? _a2 : 1;
+        layer.pdf.opacity = (_i = layer.imageOpacity) != null ? _i : 1;
         S.updatePdfCanvasStyle(layer);
         S.schedulePdfRenders();
         return;
@@ -33453,6 +34614,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     };
     S.updateLayerOrder = function updateLayerOrder() {
       state2.layers.forEach((l, i) => {
+        var _a2, _b, _c, _d, _e, _f, _g, _h;
         if (l.imageCanvas) {
           l.imageCanvas.style.zIndex = (i * 2 + 2).toString();
           l.imageCanvas.style.opacity = l.visible ? 1 : 0;
@@ -33465,6 +34627,21 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           l.pdfCanvas.style.filter = l.trace > 0 ? `sepia(${l.trace * 0.4}) saturate(${1 + l.trace * 0.5}) hue-rotate(-10deg)` : "";
           S.updatePdfCanvasStyle(l);
         }
+        if (l.tileRoot) {
+          l.tileRoot.style.zIndex = (i * 2 + 3).toString();
+          l.tileRoot.style.opacity = l.visible ? String(l.opacity) : "0";
+          l.tileRoot.style.mixBlendMode = l.blendMode && l.blendMode !== "source-over" ? l.blendMode : "";
+          l.tileRoot.style.filter = l.trace > 0 ? `sepia(${l.trace * 0.4}) saturate(${1 + l.trace * 0.5}) hue-rotate(-10deg)` : "";
+        }
+        if (l.imageElement) {
+          const rotated = Math.abs((((_a2 = l.imageTransform) == null ? void 0 : _a2.rotation) || 0) % 360) > 1e-3;
+          l.imageElement.style.display = l.visible !== false && rotated ? "block" : "none";
+          l.imageElement.style.opacity = String((_b = l.imageOpacity) != null ? _b : 1);
+        }
+        (_e = (_c = l.imagePyramid) == null ? void 0 : _c.setVisible) == null ? void 0 : _e.call(
+          _c,
+          l.visible !== false && Math.abs((((_d = l.imageTransform) == null ? void 0 : _d.rotation) || 0) % 360) < 1e-3
+        );
         l.canvas.style.zIndex = (i * 2 + 3).toString();
         l.canvas.style.opacity = l.visible ? l.opacity : 0;
         l.canvas.style.mixBlendMode = l.blendMode && l.blendMode !== "source-over" ? l.blendMode : "";
@@ -33474,11 +34651,26 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           l.canvas.style.filter = "";
         }
         const hasUnbakedImage = l.image && !l.imageBaked;
-        l.canvas.style.pointerEvents = i === state2.activeLayer && state2.mode === "draw" && !hasUnbakedImage ? "auto" : "none";
+        const engineLayer = (_f = S.layerEngine) == null ? void 0 : _f.getLayer(l.engineId);
+        const canDraw = !engineLayer || !!((_h = (_g = S.layerEngine) == null ? void 0 : _g.getLayerCapabilities(l.engineId)) == null ? void 0 : _h.canDraw) && !engineLayer.locked;
+        l.canvas.style.pointerEvents = i === state2.activeLayer && state2.mode === "draw" && !hasUnbakedImage && canDraw ? "auto" : "none";
       });
       S.rulerOverlay.style.zIndex = "999";
       S.refreshImageOverlay();
       if (state2.layers.some((layer) => layer.pdf)) S.schedulePdfRenders();
+      if (state2.layers.some((layer) => layer.imagePyramid)) S.scheduleImageRenders();
+    };
+    S._imageRenderTimer = null;
+    S.scheduleImageRenders = function scheduleImageRenders() {
+      clearTimeout(S._imageRenderTimer);
+      S._imageRenderTimer = setTimeout(() => {
+        (state2.layers || []).forEach((layer) => {
+          if (layer.imagePyramid && layer.visible !== false) {
+            layer.imagePyramid.refresh().catch(() => {
+            });
+          }
+        });
+      }, 120);
     };
     S.activeLayer = function activeLayer() {
       return state2.layers[state2.activeLayer];
@@ -33490,6 +34682,18 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       for (let i = layer.history.length - 1; i >= 0; i--) {
         const e = layer.history[i];
         total += (e.before ? e.before.data.length : 0) + (e.after ? e.after.data.length : 0);
+        if (e.tiles) {
+          total += e.tiles.reduce(
+            (sum, patch) => sum + patch.before.data.length + patch.after.data.length,
+            0
+          );
+        }
+        if (e.vectorTiles) {
+          total += e.vectorTiles.reduce(
+            (sum, patch) => sum + patch.before.data.length + patch.after.data.length,
+            0
+          );
+        }
         if (total > budget && layer.history.length > minSteps) {
           layer.history.splice(0, i + 1);
           break;
@@ -33537,6 +34741,18 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return { x, y, w, h };
     };
     S.saveSnapshot = function saveSnapshot(layer) {
+      var _a2, _b;
+      if (layer.tileStore) {
+        const patches = layer.tileStore.endPatch();
+        const vectorPatches = ((_b = (_a2 = layer.vectorTileStore) == null ? void 0 : _a2.endPatch) == null ? void 0 : _b.call(_a2)) || [];
+        if (patches.length || vectorPatches.length) {
+          layer.history.push({ tiles: patches, vectorTiles: vectorPatches });
+          layer.redo = [];
+          layer._dirty = true;
+          S.scheduleAutosave();
+        }
+        return;
+      }
       try {
         const after = layer.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
         const before = layer._cur || after;
@@ -33607,6 +34823,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.scheduleAutosave();
     };
     S.undo = function undo() {
+      var _a2, _b;
       if (S.massing.active) {
         S.massUndo();
         return;
@@ -33621,6 +34838,18 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         S.scheduleAutosave();
         return;
       }
+      if (e.tiles && l.tileStore) {
+        l.tileStore.applyPatches(e.tiles, "before");
+        if (((_a2 = e.vectorTiles) == null ? void 0 : _a2.length) && l.vectorTileStore) {
+          l.vectorTileStore.applyPatches(e.vectorTiles, "before");
+        }
+        if (((_b = e.stroke) == null ? void 0 : _b.id) && l.strokeStore) l.strokeStore.remove(e.stroke.id);
+        l.redo.push(e);
+        l._dirty = true;
+        S.scheduleAutosave();
+        S.renderLayers();
+        return;
+      }
       l.ctx.putImageData(e.before, e.x, e.y);
       l.redo.push(e);
       if (l._cur) S._blitRegion(l._cur, e.before, e.x, e.y);
@@ -33629,6 +34858,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.renderLayers();
     };
     S.redo = function redo() {
+      var _a2;
       if (S.massing.active) {
         S.massRedo();
         return;
@@ -33643,6 +34873,20 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         S.scheduleAutosave();
         return;
       }
+      if (e.tiles && l.tileStore) {
+        l.tileStore.applyPatches(e.tiles, "after");
+        if (((_a2 = e.vectorTiles) == null ? void 0 : _a2.length) && l.vectorTileStore) {
+          l.vectorTileStore.applyPatches(e.vectorTiles, "after");
+        }
+        if (e.stroke && l.strokeStore && !l.strokeStore.get(e.stroke.id)) {
+          l.strokeStore.add(e.stroke);
+        }
+        l.history.push(e);
+        l._dirty = true;
+        S.scheduleAutosave();
+        S.renderLayers();
+        return;
+      }
       l.ctx.putImageData(e.after, e.x, e.y);
       l.history.push(e);
       if (l._cur) S._blitRegion(l._cur, e.after, e.x, e.y);
@@ -33651,7 +34895,21 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.renderLayers();
     };
     S.clearActive = function clearActive() {
+      var _a2, _b, _c;
       const l = S.activeLayer();
+      if (l.tileStore) {
+        const patches = l.tileStore.clear();
+        const vectorPatches = ((_b = (_a2 = l.vectorTileStore) == null ? void 0 : _a2.clear) == null ? void 0 : _b.call(_a2)) || [];
+        if (patches.length || vectorPatches.length) {
+          l.history.push({ tiles: patches, vectorTiles: vectorPatches });
+          l.redo = [];
+        }
+        (_c = l.strokeStore) == null ? void 0 : _c.clear();
+        l._dirty = true;
+        S.scheduleAutosave();
+        S.renderLayers();
+        return;
+      }
       l.ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
       S.saveSnapshot(l);
       S.renderLayers();
@@ -33681,6 +34939,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const rows = S.layerEngine.getPanelRows({ includeObjects: true, hideFloors: true });
         const activeId = S.layerEngine.getActiveLayerId();
         const paintIds = S.layerEngine.getRasterLayerIds();
+        const drawableIds = paintIds.filter((id) => {
+          var _a2;
+          return (_a2 = S.layerEngine.getLayerCapabilities(id)) == null ? void 0 : _a2.canDraw;
+        });
         const multi = state2._panelMultiSelect || /* @__PURE__ */ new Set();
         const selectedObjId = state2._panelSelectedObjectId;
         for (const row of rows) {
@@ -33816,7 +35078,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             ${surf ? `<button class="layer-act" data-action="menu" data-idx="${idx}" title="Layer options">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
             </button>` : ""}
-            <button class="layer-act" data-action="del" data-id="${row.id}" ${paintIds.length <= 1 && surf || row.layerKind === "object" ? 'style="opacity:.2;pointer-events:none"' : ""}>
+            <button class="layer-act" data-action="del" data-id="${row.id}" ${row.layerKind === "sketch" && drawableIds.length <= 1 || row.layerKind === "object" ? 'style="opacity:.2;pointer-events:none"' : ""}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
             </button>
           </div>`;
@@ -33833,6 +35095,11 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             if (!surf && row.layerKind === "object") {
               S.layerEngine.setLayerExpanded(row.id, true);
               S.renderLayers();
+              return;
+            }
+            const caps = S.layerEngine.getLayerCapabilities(row.id);
+            if (!(caps == null ? void 0 : caps.canDraw) || (meta == null ? void 0 : meta.locked)) {
+              S.showHint(`${row.name} is a locked reference \xB7 use the eye icon to show or hide it`);
               return;
             }
             S.layerEngine.setActiveLayer(row.id);
@@ -34698,8 +35965,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     const $all = (sel) => document.querySelectorAll(sel);
     const $qs = (sel) => document.querySelector(sel);
     S.strokeCanvas = document.createElement("canvas");
-    S.strokeCanvas.width = S.doc.wPx;
-    S.strokeCanvas.height = S.doc.hPx;
+    S.strokeCanvas.width = 1;
+    S.strokeCanvas.height = 1;
     S.strokeCanvas.id = "stroke-buffer";
     S.strokeCanvas.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;display:block;pointer-events:none;opacity:0;will-change:opacity;";
     S.strokeCtx = S.strokeCanvas.getContext("2d");
@@ -34708,6 +35975,125 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     S.replayCtx = S.replayCanvas.getContext("2d");
     S.strokeTarget = function strokeTarget() {
       return state2.usingBuffer ? S.strokeCtx : S.activeLayer().ctx;
+    };
+    S.drawOnLayerTiles = function drawOnLayerTiles(layer, rect, draw) {
+      if (layer == null ? void 0 : layer.tileStore) {
+        layer.tileStore.forEachContext(
+          rect,
+          (ctx) => draw(ctx)
+        );
+        return;
+      }
+      draw(layer.ctx);
+    };
+    S.stampLayer = function stampLayer(layer, x, y, radius, draw) {
+      var _a2;
+      const rect = { x: x - radius, y: y - radius, w: radius * 2, h: radius * 2 };
+      S.drawOnLayerTiles(layer, rect, draw);
+      if (((_a2 = S.activeBrush()) == null ? void 0 : _a2.kind) === "erase" && (layer == null ? void 0 : layer.vectorTileStore)) {
+        layer.vectorTileStore.forEachContext(
+          rect,
+          (ctx) => draw(ctx)
+        );
+      }
+    };
+    S.paintRecordedStroke = function paintRecordedStroke(ctx, stroke) {
+      var _a2, _b;
+      if ((_a2 = stroke.stamps) == null ? void 0 : _a2.length) {
+        for (const stamp of stroke.stamps) {
+          const gradient = ctx.createRadialGradient(
+            stamp.x,
+            stamp.y,
+            0,
+            stamp.x,
+            stamp.y,
+            stamp.radius
+          );
+          gradient.addColorStop(0, `rgba(0,0,0,${stamp.strength})`);
+          gradient.addColorStop(
+            Math.max(0.05, stamp.hardness),
+            `rgba(0,0,0,${stamp.strength * 0.82})`
+          );
+          gradient.addColorStop(1, "rgba(0,0,0,0)");
+          ctx.save();
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.fillStyle = gradient;
+          ctx.fillRect(
+            stamp.x - stamp.radius,
+            stamp.y - stamp.radius,
+            stamp.radius * 2,
+            stamp.radius * 2
+          );
+          ctx.restore();
+        }
+        return;
+      }
+      ctx.strokeStyle = stroke.color;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalAlpha = (_b = stroke.opacity) != null ? _b : 1;
+      ctx.globalCompositeOperation = stroke.blendMode || "source-over";
+      ctx.beginPath();
+      ctx.moveTo(stroke.start.x, stroke.start.y);
+      for (const segment of stroke.segments) {
+        ctx.lineWidth = segment.width;
+        ctx.quadraticCurveTo(
+          segment.cx,
+          segment.cy,
+          segment.mx,
+          segment.my
+        );
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(segment.mx, segment.my);
+      }
+    };
+    S.renderRecordedStroke = function renderRecordedStroke(layer, stroke) {
+      var _a2, _b;
+      if (!(layer == null ? void 0 : layer.vectorTileStore) || !((_a2 = stroke == null ? void 0 : stroke.segments) == null ? void 0 : _a2.length) && !((_b = stroke == null ? void 0 : stroke.stamps) == null ? void 0 : _b.length) || !stroke.bounds) return;
+      layer.vectorTileStore.forEachContext(
+        stroke.bounds,
+        (ctx) => S.paintRecordedStroke(ctx, stroke)
+      );
+    };
+    S.refreshVectorTileCaches = async function refreshVectorTileCaches() {
+      var _a2, _b;
+      if (!S.area || typeof S.clientToCanvas !== "function") return;
+      const area = S.area.getBoundingClientRect();
+      const a = S.clientToCanvas(area.left, area.top);
+      const b = S.clientToCanvas(area.right, area.bottom);
+      const visible = {
+        x: Math.max(0, Math.min(a.x, b.x)),
+        y: Math.max(0, Math.min(a.y, b.y)),
+        w: Math.abs(b.x - a.x),
+        h: Math.abs(b.y - a.y)
+      };
+      for (const layer of state2.layers || []) {
+        if (layer.tileStore) {
+          await layer.tileStore.ensureVisible(visible);
+          layer.tileStore.evictOutside(visible);
+        }
+        if (!layer.vectorTileStore || !layer.strokeStore) continue;
+        layer.vectorTileStore.dropOutside(visible, true);
+        const coordinates = ((_b = (_a2 = S).__tileCoordinatesForRect) == null ? void 0 : _b.call(
+          _a2,
+          visible,
+          S.doc.wPx,
+          S.doc.hPx,
+          layer.vectorTileStore.tileSize
+        )) || [];
+        for (const tile of coordinates) {
+          if (layer.vectorTileStore.has(tile.key)) continue;
+          const strokes = layer.strokeStore.inTile(tile.column, tile.row);
+          if (!strokes.length) continue;
+          layer.vectorTileStore.forEachContext(
+            { x: tile.x, y: tile.y, w: tile.width, h: tile.height },
+            (ctx) => {
+              for (const stroke of strokes) S.paintRecordedStroke(ctx, stroke);
+            }
+          );
+        }
+      }
     };
     S.pressureFor = function pressureFor(e) {
       if (e.pointerType === "pen" && e.pressure > 0) return e.pressure;
@@ -35281,11 +36667,28 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       if (["rect", "circle"].includes(state2.tool)) {
         state2._shapeEnd = null;
-        state2.snapshot = l.ctx.getImageData(0, 0, S.doc.wPx, S.doc.hPx);
+        state2.snapshot = null;
+        const dpr = window.devicePixelRatio || 1;
+        const previewScale = Math.max(
+          0.2,
+          Math.min(
+            state2.baseZoom * state2.zoom * dpr,
+            Math.min(1, 1600 / Math.max(S.doc.wPx, S.doc.hPx))
+          )
+        );
+        state2.shapePreviewScale = previewScale;
+        S.strokeCanvas.width = Math.max(1, Math.round(S.doc.wPx * previewScale));
+        S.strokeCanvas.height = Math.max(1, Math.round(S.doc.hPx * previewScale));
+        S.strokeCtx.setTransform(previewScale, 0, 0, previewScale, 0, 0);
+        S.strokeCanvas.style.opacity = "1";
+        S.strokeCanvas.style.zIndex = String(state2.activeLayer * 2 + 4);
         return;
       }
       const brush = pointerBrush;
-      state2.usingBuffer = brush.kind !== "erase" && !S.isProceduralBrush(brush) && !(brush.tipType === "texture" && brush.tipImage);
+      state2.effectStamps = [];
+      if (l.tileStore) l.tileStore.beginPatch();
+      if (l.vectorTileStore) l.vectorTileStore.beginPatch();
+      state2.usingBuffer = !S.isProceduralBrush(brush) && brush.id !== "eraser-soft" && !(brush.tipType === "texture" && brush.tipImage);
       if (state2.usingBuffer) {
         const dpr = window.devicePixelRatio || 1;
         const longSide = Math.max(S.doc.wPx, S.doc.hPx);
@@ -35313,11 +36716,16 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       const tgt = S.strokeTarget();
       state2.strokeBBox = { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y, maxW: state2.size };
       if (brush.id === "eraser-soft") {
-        S.stampSoftEraser(l.ctx, brush, p.x, p.y, S.pressureFor(e));
+        const pressure = S.pressureFor(e);
+        const normalized = Math.max(0.05, Math.min(1, pressure));
+        const radius = Math.max(2, state2.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * normalized) * 0.5);
+        const strength = Math.max(0.06, Math.min(1, state2.alpha * (0.2 + normalized * 0.8)));
+        state2.effectStamps.push({ x: p.x, y: p.y, radius, strength, hardness: brush.hardness || 0.25 });
+        S.stampLayer(l, p.x, p.y, state2.size, (ctx) => S.stampSoftEraser(ctx, brush, p.x, p.y, pressure));
       } else if (S.isProceduralBrush(brush)) {
-        S.stampProceduralTexture(l.ctx, brush, p.x, p.y, S.pressureFor(e), 0);
+        S.stampLayer(l, p.x, p.y, state2.size * 2, (ctx) => S.stampProceduralTexture(ctx, brush, p.x, p.y, S.pressureFor(e), 0));
       } else if (brush.tipType === "texture" && brush.tipImage) {
-        S.stampTexture(l.ctx, brush, p.x, p.y, S.pressureFor(e));
+        S.stampLayer(l, p.x, p.y, state2.size * 2, (ctx) => S.stampTexture(ctx, brush, p.x, p.y, S.pressureFor(e)));
       } else {
         S.configurePen(tgt, S.pressureFor(e), brush, state2.usingBuffer);
         tgt.beginPath();
@@ -35336,7 +36744,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       if (state2.pinchStart && S.activePointers.size === 2) {
         const pts = Array.from(S.activePointers.values());
         const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-        state2.zoom = Math.max(0.2, Math.min(8, state2.pinchStart.zoom * (dist / state2.pinchStart.dist)));
+        state2.zoom = Math.max(0.2, Math.min(64, state2.pinchStart.zoom * (dist / state2.pinchStart.dist)));
         const midX = (pts[0].x + pts[1].x) / 2;
         const midY = (pts[0].y + pts[1].y) / 2;
         state2.panX = state2.pinchStart.panX + (midX - state2.pinchStart.midX);
@@ -35397,25 +36805,29 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           $el("snap-badge").classList.remove("show");
         }
         state2._shapeEnd = { x: tp.x, y: tp.y };
-        l.ctx.putImageData(state2.snapshot, 0, 0);
-        l.ctx.globalCompositeOperation = "source-over";
-        l.ctx.globalAlpha = state2.alpha;
-        l.ctx.strokeStyle = state2.color;
-        l.ctx.lineWidth = Math.max(0.5, state2.size);
-        l.ctx.lineCap = "round";
-        l.ctx.lineJoin = "round";
-        l.ctx.beginPath();
+        const previewScale = state2.shapePreviewScale || 1;
+        S.strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
+        S.strokeCtx.clearRect(0, 0, S.strokeCanvas.width, S.strokeCanvas.height);
+        S.strokeCtx.setTransform(previewScale, 0, 0, previewScale, 0, 0);
+        const previewCtx = S.strokeCtx;
+        previewCtx.globalCompositeOperation = "source-over";
+        previewCtx.globalAlpha = state2.alpha;
+        previewCtx.strokeStyle = state2.color;
+        previewCtx.lineWidth = Math.max(0.5, state2.size);
+        previewCtx.lineCap = "round";
+        previewCtx.lineJoin = "round";
+        previewCtx.beginPath();
         if (state2.tool === "line") {
-          l.ctx.moveTo(state2.startX, state2.startY);
-          l.ctx.lineTo(tp.x, tp.y);
-          l.ctx.stroke();
+          previewCtx.moveTo(state2.startX, state2.startY);
+          previewCtx.lineTo(tp.x, tp.y);
+          previewCtx.stroke();
         } else if (state2.tool === "rect") {
-          l.ctx.strokeRect(state2.startX, state2.startY, tp.x - state2.startX, tp.y - state2.startY);
+          previewCtx.strokeRect(state2.startX, state2.startY, tp.x - state2.startX, tp.y - state2.startY);
         } else if (state2.tool === "circle") {
           const dx = tp.x - state2.startX, dy = tp.y - state2.startY;
           const r = Math.sqrt(dx * dx + dy * dy);
-          l.ctx.arc(state2.startX, state2.startY, r, 0, Math.PI * 2);
-          l.ctx.stroke();
+          previewCtx.arc(state2.startX, state2.startY, r, 0, Math.PI * 2);
+          previewCtx.stroke();
         }
         return;
       }
@@ -35455,7 +36867,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const taperPr = pr * taperIn;
         if (brush.id === "eraser-soft") {
           const effSize = Math.max(2, state2.size * (1 - (brush.pressureSize || 0) + (brush.pressureSize || 0) * taperPr));
-          S.stampSoftEraser(l.ctx, brush, p.x, p.y, taperPr);
+          const radius = effSize * 0.5;
+          const strength = Math.max(0.06, Math.min(1, state2.alpha * (0.2 + taperPr * 0.8)));
+          state2.effectStamps.push({ x: p.x, y: p.y, radius, strength, hardness: brush.hardness || 0.25 });
+          S.stampLayer(l, p.x, p.y, effSize, (ctx) => S.stampSoftEraser(ctx, brush, p.x, p.y, taperPr));
           const bb = state2.strokeBBox;
           if (bb) {
             bb.minX = Math.min(bb.minX, p.x);
@@ -35471,7 +36886,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           const step = Math.max(1, (brush.spacing || 0.2) * effSize);
           state2.stampAccum += segDist;
           if (state2.stampAccum >= step) {
-            S.stampProceduralTexture(l.ctx, brush, p.x, p.y, taperPr, Math.atan2(dy, dx));
+            S.stampLayer(l, p.x, p.y, effSize * 1.5, (ctx) => S.stampProceduralTexture(ctx, brush, p.x, p.y, taperPr, Math.atan2(dy, dx)));
             state2.stampAccum %= step;
           }
           const bb = state2.strokeBBox;
@@ -35496,7 +36911,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             const sy = state2.lastStampY + dy * t;
             const savedSize = brush.size;
             brush.size *= velMul * tiltMul;
-            S.stampTexture(l.ctx, brush, sx, sy, taperPr);
+            S.stampLayer(l, sx, sy, effSize * 1.5, (ctx) => S.stampTexture(ctx, brush, sx, sy, taperPr));
             brush.size = savedSize;
             state2.lastStampX = sx;
             state2.lastStampY = sy;
@@ -35583,6 +36998,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }, 320);
     };
     S.endPointer = function endPointer(e) {
+      var _a2, _b, _c, _d, _e;
       S.activePointers.delete(e.pointerId);
       if (S.activePointers.size < 2) state2.pinchStart = null;
       if (e.pointerType === "touch" && S.gestureState.touchTimes.has(e.pointerId)) {
@@ -35632,6 +37048,9 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       if (["rect", "circle"].includes(state2.tool)) {
         if (state2._shapeEnd) {
           const s = { x: state2.startX, y: state2.startY }, en = state2._shapeEnd;
+          S.strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
+          S.strokeCtx.clearRect(0, 0, S.strokeCanvas.width, S.strokeCanvas.height);
+          S.strokeCanvas.style.opacity = "0";
           if (state2.snapshot) l.ctx.putImageData(state2.snapshot, 0, 0);
           let geom = null, entity = null;
           const sw = Math.max(0.5, state2.size);
@@ -35672,9 +37091,54 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const rect = S._bboxRect(state2.strokeBBox);
         if (state2.usingBuffer) {
           const segs = state2.strokeSegs || [];
-          let before = null;
-          if (rect) before = l._cur ? S._extractRegion(l._cur, rect.x, rect.y, rect.w, rect.h) : l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-          if (segs.length) {
+          let strokeRecord = null;
+          if (segs.length && rect && l.vectorTileStore) {
+            const renderStroke = (fctx) => {
+              fctx.strokeStyle = state2.strokeColor || state2.color;
+              fctx.lineCap = brush.tipType === "chisel" || brush.tipType === "flat" ? "square" : "round";
+              fctx.lineJoin = "round";
+              fctx.globalAlpha = state2.alpha;
+              fctx.globalCompositeOperation = brush.kind === "erase" ? "destination-out" : brush.blend && brush.blend !== "source-over" ? brush.blend : "source-over";
+              fctx.beginPath();
+              fctx.moveTo(state2.strokeStart.x, state2.strokeStart.y);
+              for (const segment of segs) {
+                fctx.lineWidth = segment.w;
+                fctx.quadraticCurveTo(segment.cx, segment.cy, segment.mx, segment.my);
+                fctx.stroke();
+                fctx.beginPath();
+                fctx.moveTo(segment.mx, segment.my);
+              }
+            };
+            l.vectorTileStore.forEachContext(
+              rect,
+              (ctx) => renderStroke(ctx)
+            );
+            if (brush.kind === "erase" && l.tileStore) {
+              l.tileStore.forEachContext(
+                rect,
+                (ctx) => renderStroke(ctx)
+              );
+            }
+            if (l.strokeStore) {
+              strokeRecord = l.strokeStore.add({
+                brushId: brush.id || state2.tool,
+                color: state2.strokeColor || state2.color,
+                opacity: state2.alpha,
+                blendMode: brush.kind === "erase" ? "destination-out" : brush.blend && brush.blend !== "source-over" ? brush.blend : "source-over",
+                start: { ...state2.strokeStart },
+                segments: segs.map((segment) => ({
+                  cx: segment.cx,
+                  cy: segment.cy,
+                  mx: segment.mx,
+                  my: segment.my,
+                  width: segment.w
+                })),
+                bounds: { ...rect }
+              });
+            }
+          } else if (segs.length) {
+            let before = null;
+            if (rect) before = l._cur ? S._extractRegion(l._cur, rect.x, rect.y, rect.w, rect.h) : l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
             if (S.replayCanvas.width !== S.doc.wPx || S.replayCanvas.height !== S.doc.hPx) {
               S.replayCanvas.width = S.doc.wPx;
               S.replayCanvas.height = S.doc.hPx;
@@ -35700,6 +37164,12 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             l.ctx.globalCompositeOperation = brush.blend && brush.blend !== "source-over" ? brush.blend : "source-over";
             l.ctx.drawImage(S.replayCanvas, 0, 0);
             l.ctx.restore();
+            if (rect && before) {
+              const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+              S.pushRegionSnapshot(l, rect.x, rect.y, before, after);
+            } else {
+              S.saveSnapshot(l);
+            }
           }
           S.strokeCtx.setTransform(1, 0, 0, 1, 0, 0);
           S.strokeCtx.clearRect(0, 0, S.strokeCanvas.width, S.strokeCanvas.height);
@@ -35707,14 +37177,44 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           S.strokeCanvas.style.mixBlendMode = "normal";
           state2.usingBuffer = false;
           state2.strokeSegs = [];
-          if (rect && before) {
-            const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
-            S.pushRegionSnapshot(l, rect.x, rect.y, before, after);
-          } else {
-            S.saveSnapshot(l);
+          if (l.tileStore) {
+            const patches = l.tileStore.endPatch();
+            const vectorPatches = ((_b = (_a2 = l.vectorTileStore) == null ? void 0 : _a2.endPatch) == null ? void 0 : _b.call(_a2)) || [];
+            if (patches.length || vectorPatches.length) {
+              l.history.push({
+                tiles: patches,
+                vectorTiles: vectorPatches,
+                stroke: strokeRecord
+              });
+              l.redo = [];
+            }
           }
         } else {
-          if (rect && l._cur) {
+          if (l.tileStore) {
+            const patches = l.tileStore.endPatch();
+            const vectorPatches = ((_d = (_c = l.vectorTileStore) == null ? void 0 : _c.endPatch) == null ? void 0 : _d.call(_c)) || [];
+            let effectStroke = null;
+            if (((_e = state2.effectStamps) == null ? void 0 : _e.length) && l.strokeStore && rect) {
+              effectStroke = l.strokeStore.add({
+                brushId: brush.id || "eraser-soft",
+                color: "#000000",
+                opacity: 1,
+                blendMode: "destination-out",
+                start: { x: state2.startX, y: state2.startY },
+                segments: [],
+                stamps: state2.effectStamps.map((stamp) => ({ ...stamp })),
+                bounds: { ...rect }
+              });
+            }
+            if (patches.length || vectorPatches.length) {
+              l.history.push({
+                tiles: patches,
+                vectorTiles: vectorPatches,
+                stroke: effectStroke
+              });
+              l.redo = [];
+            }
+          } else if (rect && l._cur) {
             const before = S._extractRegion(l._cur, rect.x, rect.y, rect.w, rect.h);
             const after = l.ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
             S.pushRegionSnapshot(l, rect.x, rect.y, before, after);
@@ -35762,7 +37262,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     S.configurePen = function configurePen(ctx, pressure, brush, skipMaster) {
       brush = brush || S.activeBrush();
       const brushApi = S.brushes;
-      const pxPerMm = state2.pxPerUnit ? state2.scaleUnit === "mm" ? state2.pxPerUnit : state2.scaleUnit === "cm" ? state2.pxPerUnit / 10 : state2.pxPerUnit / 1e3 : S.doc.dpi / 25.4;
+      const pxPerMm = S.doc.dpi / 25.4;
       if (brushApi && typeof brushApi.resolveStrokeParams === "function") {
         const params = brushApi.resolveStrokeParams(brush, pressure, {
           color: state2.color,
@@ -35883,7 +37383,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         e.preventDefault();
         const delta = -e.deltaY * 1e-3;
         const oldZoom = state2.zoom;
-        state2.zoom = Math.max(0.2, Math.min(8, state2.zoom * (1 + delta)));
+        state2.zoom = Math.max(0.2, Math.min(64, state2.zoom * (1 + delta)));
         const areaRect = S.area.getBoundingClientRect();
         const cx = e.clientX - areaRect.left - areaRect.width / 2;
         const cy = e.clientY - areaRect.top - areaRect.height / 2;
@@ -36019,10 +37519,23 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     window.addEventListener("resize", () => {
       S.fitToScreen();
     });
-    S.startScale = function startScale() {
+    S.startScale = function startScale(resumeTool) {
+      if (resumeTool) state2.scaleResumeTool = resumeTool;
       S.setTool("ruler");
       state2.pendingScale = true;
-      S.showHint("Draw a line on the canvas, then enter its real-world length");
+      S.showHint("Calibrate scale \xB7 draw a line over a known distance");
+    };
+    S.requestScaleForTool = function requestScaleForTool(tool) {
+      state2.scaleResumeTool = tool;
+      const prompt2 = $el("scale-required-prompt");
+      if (!prompt2) {
+        S.startScale(tool);
+        return;
+      }
+      if (prompt2.parentElement !== document.body) document.body.appendChild(prompt2);
+      prompt2.style.display = "block";
+      prompt2.classList.add("show");
+      S.showHint("Wall requires a calibrated reference scale");
     };
     S.openScaleApply = function openScaleApply() {
       S.scalePrompt.style.display = "block";
@@ -36042,14 +37555,19 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       setTimeout(() => inp.focus(), 30);
     };
     $el("scale-apply").addEventListener("click", () => {
+      var _a2;
       const v = parseFloat($el("scale-length").value);
       const u = $el("scale-unit").value;
       if (!v || v <= 0) return;
       const dx = state2.pendingScaleEnd.x - state2.pendingScaleStart.x;
       const dy = state2.pendingScaleEnd.y - state2.pendingScaleStart.y;
       const distPx = Math.sqrt(dx * dx + dy * dy);
-      state2.pxPerUnit = distPx / v;
-      state2.scaleUnit = u;
+      S.setScaleCalibration(
+        calibrateFromReference(distPx, v, u)
+      );
+      if ((_a2 = S.massing) == null ? void 0 : _a2.baseAnchor) {
+        S.massing.baseAnchor.ppm = S.pxPerMetre();
+      }
       const label = S.updateScaleDisplay();
       S.syncProjectScale(label);
       S.scalePrompt.classList.remove("show");
@@ -36059,8 +37577,13 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       state2.pendingScaleEnd = null;
       S.refreshMeasurements();
       S.renderSchedule();
+      if (typeof S.syncWallsToMasses === "function") S.syncWallsToMasses();
+      if (typeof S.drawDocGrid === "function") S.drawDocGrid();
       S.scheduleAutosave();
-      S.showHint(`Scale set \xB7 ${v} ${u} reference \xB7 measurements now in real units`);
+      const resumeTool = state2.scaleResumeTool;
+      state2.scaleResumeTool = null;
+      S.showHint(`Scale calibrated \xB7 ${v} ${u} reference \xB7 measurements now use real units`);
+      if (resumeTool) setTimeout(() => S.setTool(resumeTool), 0);
     });
     $el("scale-cancel").addEventListener("click", () => {
       S.scalePrompt.classList.remove("show");
@@ -36069,8 +37592,34 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       state2.pendingScaleStart = null;
       state2.pendingScaleEnd = null;
       state2.measurePreview = null;
+      state2.scaleResumeTool = null;
       S.refreshMeasurements();
     });
+    const closeRequiredPrompt = () => {
+      const prompt2 = $el("scale-required-prompt");
+      if (!prompt2) return;
+      prompt2.classList.remove("show");
+      prompt2.style.display = "none";
+    };
+    document.addEventListener("pointerdown", (event) => {
+      var _a2, _b;
+      const action = (_b = (_a2 = event.target) == null ? void 0 : _a2.closest) == null ? void 0 : _b.call(
+        _a2,
+        "#scale-required-calibrate,#scale-required-cancel"
+      );
+      if (!action) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (action.id === "scale-required-calibrate") {
+        const resumeTool = state2.scaleResumeTool || "wall";
+        closeRequiredPrompt();
+        S.startScale(resumeTool);
+      } else {
+        closeRequiredPrompt();
+        state2.scaleResumeTool = null;
+        S.showHint("Wall creation cancelled \xB7 scale remains unset");
+      }
+    }, true);
   }
 
   // src/engine/app/stencils.ts
@@ -36563,20 +38112,47 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     const $el = (id) => document.getElementById(id);
     const $all = (sel) => document.querySelectorAll(sel);
     const $qs = (sel) => document.querySelector(sel);
-    S.flattenVisibleToCtx = function flattenVisibleToCtx(ctx) {
-      ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
+    S.flattenVisibleToCtx = function flattenVisibleToCtx(ctx, scale = 1) {
+      ctx.clearRect(0, 0, S.doc.wPx * scale, S.doc.hPx * scale);
       for (const l of state2.layers) {
         if (l.visible === false) continue;
         ctx.save();
         ctx.globalAlpha = l.opacity != null ? l.opacity : 1;
-        if (l.pdf && typeof S.drawPdfLayerToCtx === "function") S.drawPdfLayerToCtx(l, ctx);
-        else if (l.imageCanvas && !l.imageBaked) ctx.drawImage(l.imageCanvas, 0, 0);
-        ctx.drawImage(l.canvas, 0, 0);
+        if (l.pdf && l.pdfCanvas && l.imageTransform) {
+          const t = l.imageTransform;
+          ctx.translate(t.x * scale, t.y * scale);
+          ctx.rotate((t.rotation || 0) * Math.PI / 180);
+          ctx.drawImage(
+            l.pdfCanvas,
+            -(t.w * scale) / 2,
+            -(t.h * scale) / 2,
+            t.w * scale,
+            t.h * scale
+          );
+        } else if (l.image && !l.imageBaked && l.imageTransform) {
+          const t = l.imageTransform;
+          ctx.translate(t.x * scale, t.y * scale);
+          ctx.rotate((t.rotation || 0) * Math.PI / 180);
+          ctx.drawImage(
+            l.image,
+            -(t.w * scale) / 2,
+            -(t.h * scale) / 2,
+            t.w * scale,
+            t.h * scale
+          );
+        } else if (l.imageCanvas && !l.imageBaked) {
+          ctx.drawImage(l.imageCanvas, 0, 0, S.doc.wPx * scale, S.doc.hPx * scale);
+        }
+        if (l.tileStore) l.tileStore.drawTo(ctx, scale);
+        if (l.vectorTileStore) l.vectorTileStore.drawTo(ctx, scale);
+        if (!l.tileStore) {
+          ctx.drawImage(l.canvas, 0, 0, S.doc.wPx * scale, S.doc.hPx * scale);
+        }
         ctx.restore();
       }
     };
     S._thumbCanvas = null;
-    S.drawVectorOverlayToCtx = function drawVectorOverlayToCtx(ctx) {
+    S.drawVectorOverlayToCtx = function drawVectorOverlayToCtx(ctx, scale = 1) {
       if (!S.rulerOverlay || typeof XMLSerializer === "undefined") return Promise.resolve();
       const clone = S.rulerOverlay.cloneNode(true);
       clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
@@ -36591,7 +38167,13 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const image = new Image();
         image.onload = () => {
           try {
-            ctx.drawImage(image, 0, 0, S.doc.wPx, S.doc.hPx);
+            ctx.drawImage(
+              image,
+              0,
+              0,
+              S.doc.wPx * scale,
+              S.doc.hPx * scale
+            );
           } catch (_) {
           }
           URL.revokeObjectURL(url);
@@ -36615,12 +38197,9 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       const tctx = S._thumbCanvas.getContext("2d");
       tctx.fillStyle = state2.paperBg || "#ffffff";
       tctx.fillRect(0, 0, tw, th);
-      const full = document.createElement("canvas");
-      full.width = S.doc.wPx;
-      full.height = S.doc.hPx;
-      S.flattenVisibleToCtx(full.getContext("2d"));
-      await S.drawVectorOverlayToCtx(full.getContext("2d"));
-      tctx.drawImage(full, 0, 0, tw, th);
+      const scale = tw / S.doc.wPx;
+      S.flattenVisibleToCtx(tctx, scale);
+      await S.drawVectorOverlayToCtx(tctx, scale);
       return new Promise((resolve) => S._thumbCanvas.toBlob(resolve, "image/jpeg", 0.84));
     };
     S.saveThumbnailLocal = async function saveThumbnailLocal(blob) {
@@ -36946,6 +38525,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     const $qs = (sel) => document.querySelector(sel);
     S.setTool = function setTool(tool) {
       if (typeof S.hideShapeChip === "function") S.hideShapeChip();
+      if (semanticToolRequiresScale(tool) && !S.hasCalibratedScale()) {
+        S.requestScaleForTool("wall");
+        return;
+      }
       if (tool === "brushes") {
         if (typeof S.openDrawToolMenu === "function") S.openDrawToolMenu();
         return;
@@ -37721,15 +39304,14 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         return null;
       }
       if (version2 === 6 || version2 === 7 || version2 === 10) {
-        let matchAt2 = function(o, s) {
+        let matchAt = function(o, s) {
           for (let i = 0; i < s.length; i++) if (dv.getUint8(o + i) !== s.charCodeAt(i)) return false;
           return true;
         };
-        var matchAt = matchAt2;
         let p = 0;
         const sig = "8BIM", tag = "samp";
         while (p < buf.byteLength - 8) {
-          if (matchAt2(p, sig) && matchAt2(p + 4, tag)) {
+          if (matchAt(p, sig) && matchAt(p + 4, tag)) {
             const len = dv.getUint32(p + 8, false);
             let q = p + 12;
             const end = q + len;
@@ -38513,10 +40095,19 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     const $qs = (sel) => document.querySelector(sel);
     S.selOverlay = document.createElement("canvas");
     S.selOverlay.id = "sel-overlay";
-    S.selOverlay.width = S.doc.wPx;
-    S.selOverlay.height = S.doc.hPx;
+    S.selOverlay.width = 1;
+    S.selOverlay.height = 1;
+    S.selOverlay.style.width = "100%";
+    S.selOverlay.style.height = "100%";
     S.paper.appendChild(S.selOverlay);
     S.selCtx = S.selOverlay.getContext("2d");
+    S.ensureSelectionSurface = function ensureSelectionSurface() {
+      if (S.selOverlay.width !== S.doc.wPx || S.selOverlay.height !== S.doc.hPx) {
+        S.selOverlay.width = S.doc.wPx;
+        S.selOverlay.height = S.doc.hPx;
+        S.selCtx = S.selOverlay.getContext("2d");
+      }
+    };
     S.selBar = $el("sel-bar");
     state2.selection = null;
     state2.clipboard = null;
@@ -38555,6 +40146,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return { count, cx: count ? sx / count : bbox.x + bbox.w / 2, cy: count ? sy / count : bbox.y + bbox.h / 2 };
     };
     S.magicWandSelect = function magicWandSelect(p, tolerance) {
+      S.ensureSelectionSurface();
       S.commitFloating();
       const l = S.activeLayer();
       if (!S._sampleCanvas) {
@@ -38650,6 +40242,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.showHint("Lasso area: " + areaStr + " \xB7 Copy / Cut / Delete / Fill \xB7 Done");
     };
     S.drawSelectionOverlay = function drawSelectionOverlay() {
+      S.ensureSelectionSurface();
       S.selCtx.setTransform(1, 0, 0, 1, 0, 0);
       S.selCtx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
       S.selOverlay.style.zIndex = (state2.layers.length * 2 + 6).toString();
@@ -39140,11 +40733,15 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return mm / 25.4 * S.doc.dpi;
     };
     S.drawDocGrid = function drawDocGrid() {
-      S.gridCanvas.width = S.doc.wPx;
-      S.gridCanvas.height = S.doc.hPx;
       const show = state2.showGrid && state2.gridType !== "off";
       S.gridCanvas.style.display = show ? "block" : "none";
-      if (!show) return;
+      if (!show) {
+        S.gridCanvas.width = 1;
+        S.gridCanvas.height = 1;
+        return;
+      }
+      S.gridCanvas.width = S.doc.wPx;
+      S.gridCanvas.height = S.doc.hPx;
       const ctx = S.gridCtx;
       ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
       const op = state2.gridOpacity;
@@ -39328,25 +40925,129 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       e.target.value = "";
     });
     $el("btn-export").addEventListener("click", async () => {
+      var _a2, _b, _c, _d;
+      const requested = window.prompt(
+        `Export DPI (${S.doc.dpi} keeps the working resolution)`,
+        String(S.doc.dpi)
+      );
+      if (requested == null) return;
+      const exportDpi = Math.max(36, Math.min(1200, Number(requested) || S.doc.dpi));
+      let exportScale = exportDpi / S.doc.dpi;
+      exportScale = Math.min(
+        exportScale,
+        16384 / Math.max(S.doc.wPx, S.doc.hPx),
+        Math.sqrt(64 * 1024 * 1024 / Math.max(1, S.doc.wPx * S.doc.hPx))
+      );
       const out = document.createElement("canvas");
-      out.width = S.doc.wPx;
-      out.height = S.doc.hPx;
+      out.width = Math.max(1, Math.round(S.doc.wPx * exportScale));
+      out.height = Math.max(1, Math.round(S.doc.hPx * exportScale));
       const octx = out.getContext("2d");
       octx.fillStyle = "#ffffff";
-      octx.fillRect(0, 0, S.doc.wPx, S.doc.hPx);
-      state2.layers.forEach((l) => {
-        if (!l.visible) return;
-        if (l.imageCanvas && !l.imageBaked) {
-          octx.globalAlpha = l.opacity;
-          octx.drawImage(l.imageCanvas, 0, 0);
-        }
+      octx.fillRect(0, 0, out.width, out.height);
+      for (const l of state2.layers) {
+        if (!l.visible) continue;
         octx.globalAlpha = l.opacity;
-        octx.drawImage(l.canvas, 0, 0);
-      });
+        if (l.pdfPage && l.pdf && l.imageTransform) {
+          const t = l.imageTransform;
+          const pageScale = t.w * exportScale / Math.max(1, l.pdf.pageWidth);
+          const viewport = l.pdfPage.getViewport({ scale: pageScale });
+          const pdfCanvas = document.createElement("canvas");
+          pdfCanvas.width = Math.max(1, Math.ceil(viewport.width));
+          pdfCanvas.height = Math.max(1, Math.ceil(viewport.height));
+          const pdfContext = pdfCanvas.getContext("2d");
+          await l.pdfPage.render({
+            canvas: pdfCanvas,
+            canvasContext: pdfContext,
+            viewport
+          }).promise;
+          octx.save();
+          octx.translate(t.x * exportScale, t.y * exportScale);
+          octx.rotate((t.rotation || 0) * Math.PI / 180);
+          octx.drawImage(
+            pdfCanvas,
+            -(t.w * exportScale) / 2,
+            -(t.h * exportScale) / 2,
+            t.w * exportScale,
+            t.h * exportScale
+          );
+          octx.restore();
+        } else if (l.image && !l.imageBaked && l.imageTransform) {
+          const t = l.imageTransform;
+          octx.save();
+          octx.translate(t.x * exportScale, t.y * exportScale);
+          octx.rotate((t.rotation || 0) * Math.PI / 180);
+          octx.drawImage(
+            l.image,
+            -(t.w * exportScale) / 2,
+            -(t.h * exportScale) / 2,
+            t.w * exportScale,
+            t.h * exportScale
+          );
+          octx.restore();
+        }
+        if (l.tileStore) await l.tileStore.drawAllTo(octx, exportScale);
+        if ((_a2 = l.strokeStore) == null ? void 0 : _a2.all) {
+          octx.save();
+          octx.scale(exportScale, exportScale);
+          for (const stroke of l.strokeStore.all()) {
+            if ((_b = stroke.stamps) == null ? void 0 : _b.length) {
+              for (const stamp of stroke.stamps) {
+                const gradient = octx.createRadialGradient(
+                  stamp.x,
+                  stamp.y,
+                  0,
+                  stamp.x,
+                  stamp.y,
+                  stamp.radius
+                );
+                gradient.addColorStop(0, `rgba(0,0,0,${stamp.strength})`);
+                gradient.addColorStop(
+                  Math.max(0.05, stamp.hardness),
+                  `rgba(0,0,0,${stamp.strength * 0.82})`
+                );
+                gradient.addColorStop(1, "rgba(0,0,0,0)");
+                octx.save();
+                octx.globalCompositeOperation = "destination-out";
+                octx.fillStyle = gradient;
+                octx.fillRect(
+                  stamp.x - stamp.radius,
+                  stamp.y - stamp.radius,
+                  stamp.radius * 2,
+                  stamp.radius * 2
+                );
+                octx.restore();
+              }
+              continue;
+            }
+            octx.strokeStyle = stroke.color;
+            octx.globalAlpha = ((_c = l.opacity) != null ? _c : 1) * ((_d = stroke.opacity) != null ? _d : 1);
+            octx.globalCompositeOperation = stroke.blendMode || "source-over";
+            octx.lineCap = "round";
+            octx.lineJoin = "round";
+            octx.beginPath();
+            octx.moveTo(stroke.start.x, stroke.start.y);
+            for (const segment of stroke.segments) {
+              octx.lineWidth = segment.width;
+              octx.quadraticCurveTo(segment.cx, segment.cy, segment.mx, segment.my);
+              octx.stroke();
+              octx.beginPath();
+              octx.moveTo(segment.mx, segment.my);
+            }
+          }
+          octx.restore();
+        } else {
+          if (l.imageCanvas && !l.imageBaked) {
+            octx.globalAlpha = l.opacity;
+            octx.drawImage(l.imageCanvas, 0, 0, out.width, out.height);
+          }
+          octx.globalAlpha = l.opacity;
+          octx.drawImage(l.canvas, 0, 0, out.width, out.height);
+        }
+      }
       octx.globalAlpha = 1;
       try {
-        const margin = Math.round(S.doc.wPx * 0.018);
-        const fs = Math.max(11, Math.round(S.doc.wPx * 72e-4));
+        const margin = Math.round(out.width * 0.018);
+        const fs = Math.max(11, Math.round(out.width * 72e-4));
         const now = /* @__PURE__ */ new Date();
         const pad = (n) => String(n).padStart(2, "0");
         const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
@@ -39357,7 +41058,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         octx.textAlign = "left";
         octx.textBaseline = "alphabetic";
         octx.fillStyle = "rgba(10,10,10,0.62)";
-        octx.fillText(stampText, margin, S.doc.hPx - margin);
+        octx.fillText(stampText, margin, out.height - margin);
         octx.restore();
       } catch (e) {
       }
@@ -39385,7 +41086,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         S.updateZoomDisplay();
         return;
       }
-      state2.zoom = window.StudioHelpers ? window.StudioHelpers.zoomIn(state2.zoom) : Math.min(8, state2.zoom * 1.25);
+      state2.zoom = window.StudioHelpers ? window.StudioHelpers.zoomIn(state2.zoom) : Math.min(64, state2.zoom * 1.25);
       S.applyStageTransform();
     };
     S.handleZoomOut = function handleZoomOut() {
@@ -40280,31 +41981,27 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return per;
     };
     S.formatArea = function formatArea(areaPx2) {
-      if (state2.pxPerUnit && state2.scaleUnit) {
-        const u = state2.scaleUnit;
-        const unitInMm = { mm: 1, cm: 10, m: 1e3, in: 25.4, ft: 304.8 }[u] || 1;
-        const mmPerPx = unitInMm / state2.pxPerUnit;
-        const areaMm22 = areaPx2 * mmPerPx * mmPerPx;
+      if (S.hasCalibratedScale()) {
+        const u = state2.scaleCalibration.displayUnit;
+        const mmPerDocUnit = Number(state2.scaleCalibration.mmPerDocumentUnit);
+        const areaMm2 = areaPx2 * mmPerDocUnit * mmPerDocUnit;
         if (u === "in" || u === "ft") {
-          const ft2 = areaMm22 / 92903.04;
+          const ft2 = areaMm2 / 92903.04;
           if (ft2 >= 1) return `${ft2.toFixed(2)} ft\xB2`;
-          return `${(areaMm22 / 645.16).toFixed(1)} in\xB2`;
+          return `${(areaMm2 / 645.16).toFixed(1)} in\xB2`;
         }
-        const m2 = areaMm22 / 1e6;
+        const m2 = areaMm2 / 1e6;
         if (m2 >= 1) return `${m2.toFixed(2)} m\xB2`;
-        const cm2 = areaMm22 / 100;
+        const cm2 = areaMm2 / 100;
         if (cm2 >= 1) return `${cm2.toFixed(1)} cm\xB2`;
-        return `${areaMm22.toFixed(0)} mm\xB2`;
+        return `${areaMm2.toFixed(0)} mm\xB2`;
       }
-      const docPxPerMm = S.doc.wPx / S.doc.wMM;
-      const areaMm2 = areaPx2 / (docPxPerMm * docPxPerMm);
-      return `${(areaMm2 / 100).toFixed(0)} cm\xB2 (est.)`;
+      return `${Math.round(areaPx2)} du\xB2 (unscaled)`;
     };
     S.formatLen = function formatLen(px) {
-      if (state2.pxPerUnit && state2.scaleUnit) {
-        const u = state2.scaleUnit;
-        const unitInMm = { mm: 1, cm: 10, m: 1e3, in: 25.4, ft: 304.8 }[u] || 1;
-        const mm = px / state2.pxPerUnit * unitInMm;
+      if (S.hasCalibratedScale()) {
+        const u = state2.scaleCalibration.displayUnit;
+        const mm = S.docUnitsToMM(px);
         if (u === "in" || u === "ft") {
           const ft = mm / 304.8;
           if (ft >= 1) return `${ft.toFixed(2)} ft`;
@@ -40316,7 +42013,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         if (cm >= 1) return `${cm.toFixed(1)} cm`;
         return `${mm.toFixed(0)} mm`;
       }
-      return `${Math.round(px)} px`;
+      return `${Math.round(px)} du (unscaled)`;
     };
     S.ensureSchedulePanel = function ensureSchedulePanel() {
       if (document.getElementById("room-schedule")) return;
@@ -40428,7 +42125,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
     };
     S.wallThickPx = function wallThickPx(w) {
-      return Math.max(2, w.thickMM / 1e3 * S.pxPerMetre());
+      const calibrated = S.mmToDocUnits(w.thickMM || 230);
+      if (calibrated != null) return Math.max(2, calibrated);
+      const viewScale = Math.max(0.01, state2.zoom * state2.baseZoom);
+      return Math.max(2, 6 / viewScale);
     };
     S._SVGNS = "http://www.w3.org/2000/svg";
     S._ovLine = function _ovLine(x1, y1, x2, y2, stroke, wdt, dash) {
@@ -41628,9 +43328,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         ny = -ny;
       }
       const viewScale = Math.max(0.01, (state2.zoom || 1) * (state2.baseZoom || 1));
-      const extLen = settingScale ? 160 / viewScale : 28;
-      const labelOff = settingScale ? 40 / viewScale : 20;
-      const tickLen = 12;
+      const calibrationMetrics = calibrationAnnotationMetrics(viewScale);
+      const extLen = settingScale ? calibrationMetrics.extensionLength : 28;
+      const labelOff = settingScale ? calibrationMetrics.labelOffset : 20;
+      const tickLen = settingScale ? calibrationMetrics.tickLength : 12;
       if (settingScale) {
         const mx = (m.x1 + m.x2) / 2, my = (m.y1 + m.y2) / 2;
         const offset = extLen + labelOff;
@@ -41639,7 +43340,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         if (area && matrix) {
           const overflow = (side) => {
             const p = new DOMPoint(mx + nx * offset * side, my + ny * offset * side).matrixTransform(matrix);
-            const margin = 28;
+            const margin = calibrationMetrics.viewportMargin;
             return Math.max(0, area.left + margin - p.x) + Math.max(0, p.x - area.right + margin) + Math.max(0, area.top + margin - p.y) + Math.max(0, p.y - area.bottom + margin);
           };
           if (overflow(-1) < overflow(1)) {
@@ -41648,7 +43349,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           }
         } else {
           const lx2 = mx + nx * offset, ly2 = my + ny * offset;
-          const margin = 24 / viewScale;
+          const margin = calibrationMetrics.viewportMargin / viewScale;
           if (lx2 < margin || lx2 > S.doc.wPx - margin || ly2 < margin || ly2 > S.doc.hPx - margin) {
             nx = -nx;
             ny = -ny;
@@ -41661,8 +43362,11 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         el.setAttribute("y1", String(y + ny * extLen));
         el.setAttribute("x2", String(x - nx * 6));
         el.setAttribute("y2", String(y - ny * 6));
+        el.setAttribute(
+          "stroke-width",
+          String(settingScale ? calibrationMetrics.extensionStrokeWidth : 1.5)
+        );
         el.setAttribute("stroke", color);
-        el.setAttribute("stroke-width", "1.5");
         el.setAttribute("pointer-events", "none");
         S.rulerOverlay.appendChild(el);
       });
@@ -41672,7 +43376,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       dline.setAttribute("x2", String(m.x2 + nx * extLen));
       dline.setAttribute("y2", String(m.y2 + ny * extLen));
       dline.setAttribute("stroke", color);
-      dline.setAttribute("stroke-width", "2");
+      dline.setAttribute(
+        "stroke-width",
+        String(settingScale ? calibrationMetrics.dimensionStrokeWidth : 2)
+      );
       dline.setAttribute("pointer-events", "none");
       S.rulerOverlay.appendChild(dline);
       [[m.x1, m.y1], [m.x2, m.y2]].forEach(([x, y]) => {
@@ -41684,7 +43391,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         tick.setAttribute("x2", String(tx + ux * tickLen + nx * tickLen / 2));
         tick.setAttribute("y2", String(ty + uy * tickLen + ny * tickLen / 2));
         tick.setAttribute("stroke", color);
-        tick.setAttribute("stroke-width", "2.5");
+        tick.setAttribute(
+          "stroke-width",
+          String(settingScale ? calibrationMetrics.tickStrokeWidth : 2.5)
+        );
         tick.setAttribute("pointer-events", "none");
         S.rulerOverlay.appendChild(tick);
       });
@@ -41692,7 +43402,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const c = document.createElementNS(svgns, "circle");
         c.setAttribute("cx", String(x));
         c.setAttribute("cy", String(y));
-        c.setAttribute("r", "7");
+        c.setAttribute(
+          "r",
+          String(settingScale ? calibrationMetrics.endpointRadius : 7)
+        );
         c.setAttribute("fill", color);
         c.setAttribute("pointer-events", "none");
         S.rulerOverlay.appendChild(c);
@@ -41703,15 +43416,22 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       const ly = (m.y1 + m.y2) / 2 + ny * (extLen + labelOff);
       const angle = Math.atan2(dy, dx) * 180 / Math.PI;
       const readableAngle = angle > 90 || angle < -90 ? angle + 180 : angle;
-      const pW = text.length * 15 + (isPreview ? 20 : 60);
+      const pW = settingScale ? Math.max(
+        calibrationMetrics.minimumPanelWidth,
+        text.length * calibrationMetrics.estimatedCharacterWidth + calibrationMetrics.panelHorizontalPadding
+      ) : text.length * 15 + (isPreview ? 20 : 60);
       const g = document.createElementNS(svgns, "g");
       g.setAttribute("transform", `rotate(${readableAngle} ${lx} ${ly})`);
       const bg = document.createElementNS(svgns, "rect");
+      const panelHeight = settingScale ? calibrationMetrics.panelHeight : 34;
       bg.setAttribute("x", String(lx - pW / 2));
-      bg.setAttribute("y", String(ly - 18));
+      bg.setAttribute("y", String(ly - panelHeight / 2));
       bg.setAttribute("width", String(pW));
-      bg.setAttribute("height", String(34));
-      bg.setAttribute("rx", String(5));
+      bg.setAttribute("height", String(panelHeight));
+      bg.setAttribute(
+        "rx",
+        String(settingScale ? calibrationMetrics.panelRadius : 5)
+      );
       bg.setAttribute("fill", isPreview ? "#a02835" : "#1d4ed8");
       bg.setAttribute("pointer-events", isPreview ? "none" : "auto");
       if (!isPreview && typeof mIndex === "number") bg.dataset.measureIdx = String(mIndex);
@@ -41726,12 +43446,18 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       g.appendChild(bg);
       const lbl = document.createElementNS(svgns, "text");
       lbl.setAttribute("x", String(lx - (isPreview ? 0 : 14)));
-      lbl.setAttribute("y", String(ly + 6));
+      lbl.setAttribute(
+        "y",
+        String(ly + (settingScale ? calibrationMetrics.labelBaselineOffset : 6))
+      );
       lbl.setAttribute("text-anchor", "middle");
       lbl.setAttribute("fill", "white");
       lbl.setAttribute("font-family", "JetBrains Mono,monospace");
       lbl.setAttribute("font-weight", "600");
-      lbl.setAttribute("font-size", "19");
+      lbl.setAttribute(
+        "font-size",
+        String(settingScale ? calibrationMetrics.fontSize : 19)
+      );
       lbl.setAttribute("pointer-events", "none");
       lbl.textContent = text;
       g.appendChild(lbl);
@@ -42523,6 +44249,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
     };
     S.commitWallSegment = function commitWallSegment(a, b) {
+      if (!S.hasCalibratedScale()) {
+        S.requestScaleForTool("wall");
+        return null;
+      }
       const ja = S.joinWallEndpoint(a);
       const jb = S.joinWallEndpoint(b);
       if (Math.hypot(jb.x - ja.x, jb.y - ja.y) < MIN_WALL_LEN) {
@@ -44508,10 +46238,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return contour;
     };
     S.pxPerMetre = function pxPerMetre() {
-      if (state2.pxPerUnit && state2.scaleUnit) {
-        const unitInMm = { mm: 1, cm: 10, m: 1e3, in: 25.4, ft: 304.8 }[state2.scaleUnit] || 1;
-        return state2.pxPerUnit / unitInMm * 1e3;
-      }
+      const calibrated = S.mmToDocUnits(1e3);
+      if (calibrated != null) return calibrated;
       return S.doc.wPx / S.doc.wMM * 1e3;
     };
     S.extrudeSelection = function extrudeSelection() {
@@ -44549,7 +46277,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       const A = S.massing.baseAnchor;
       const poly = simp.map((p) => ({ x: (p.x - A.px) / A.ppm, z: (p.y - A.py) / A.ppm }));
-      const hadScale = !!(state2.pxPerUnit && state2.scaleUnit);
+      const hadScale = S.hasCalibratedScale();
       S.clearSelection();
       S.enterMassing();
       S.massing.showBase = true;
@@ -44662,7 +46390,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       const A = S.massing.baseAnchor;
       const poly = ptsPx.map((p) => ({ x: (p.x - A.px) / A.ppm, z: (p.y - A.py) / A.ppm }));
-      const hadScale = !!(state2.pxPerUnit && state2.scaleUnit);
+      const hadScale = S.hasCalibratedScale();
       S.enterMassing();
       S.massing.showBase = true;
       S.updateMassBaseBtn();
@@ -46023,11 +47751,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     };
     S._origApplyStageTransform = S.applyStageTransform;
     S.applyStageTransform = function applyStageTransform() {
-      S.stage.style.transform = `translate(${state2.panX}px, ${state2.panY}px)`;
+      S._origApplyStageTransform();
       S.paper.style.transform = `translate(-50%, -50%) scale(${state2.zoom * state2.baseZoom}) rotate(${state2.canvasRotation}deg)`;
-      $el("zoom-level").textContent = Math.round(state2.zoom * 100) + "%";
-      S.refreshMeasurements();
-      if (typeof S.schedulePdfRenders === "function") S.schedulePdfRenders();
     };
     S.area.addEventListener("touchstart", (e) => {
       if (e.touches.length === 2) {
@@ -46286,7 +48011,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return S._mutationVersion;
     };
     S.applyScaleBlank = function applyScaleBlank() {
-      state2.pxPerUnit = null;
+      S.clearScaleCalibration();
       S.updateScaleDisplay();
     };
     S.handleStartFresh = function handleStartFresh() {
@@ -46322,6 +48047,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.scheduleThumbnail();
     });
     window.addEventListener("message", async (e) => {
+      var _a2, _b;
       const data = e.data;
       if (!data || typeof data !== "object") return;
       const type = data.type;
@@ -46419,6 +48145,35 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
               type: "sketchtrude-export-document-result",
               document: null,
               error: message
+            }, "*");
+          }
+        }
+        return;
+      }
+      if (type === "sketchtrude-import-canvas-source") {
+        const projectId = window.__SKETCHTRUDE_PROJECT_ID;
+        if (data.projectId && String(data.projectId) !== String(projectId)) return;
+        try {
+          await S.importCanvasSource(data.file, {
+            sourceId: data.sourceId,
+            kind: data.kind,
+            pageNumber: data.pageNumber
+          });
+          await ((_b = (_a2 = S).saveDoc) == null ? void 0 : _b.call(_a2));
+          if (window.parent !== window) {
+            window.parent.postMessage({
+              type: "sketchtrude-canvas-source-import-result",
+              projectId,
+              ok: true
+            }, "*");
+          }
+        } catch (err) {
+          if (window.parent !== window) {
+            window.parent.postMessage({
+              type: "sketchtrude-canvas-source-import-result",
+              projectId,
+              ok: false,
+              error: err && err.message ? err.message : "Could not import the canvas source."
             }, "*");
           }
         }
@@ -46677,7 +48432,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return S.cloneForSave(state2.walls || [], []);
     };
     S.saveDoc = async function saveDoc() {
-      var _a2;
+      var _a2, _b, _c, _d, _e, _f, _g;
       if (S._autosaveBusy) return S.waitForAutosave();
       if (S._autosaveSuspended || !state2.layers.length) return;
       if (state2.drawing) {
@@ -46689,6 +48444,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       try {
         const layerData = [];
         for (const l of state2.layers) {
+          const engineLayer = l.engineId && S.layerEngine ? S.layerEngine.getLayer(l.engineId) : null;
           if (l.pdf && !l.pdf.storagePath && l.pdfBlob && typeof S.uploadPdfAsset === "function") {
             try {
               const asset = await S.uploadPdfAsset(l.pdfBlob);
@@ -46699,7 +48455,33 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             } catch (_) {
             }
           }
-          if (l._dirty || !l._savedBlob) {
+          if (l.imageReference && !l.imageReference.storagePath && l.imageBlob && typeof S.uploadImageAsset === "function") {
+            try {
+              const asset = await S.uploadImageAsset(l.imageBlob);
+              if (asset) {
+                l.imageReference.storagePath = asset.storagePath;
+                l.imageUrl = asset.signedUrl;
+              }
+            } catch (_) {
+            }
+          }
+          let hybridRendering = null;
+          if (l.tileStore) {
+            const tiles = await l.tileStore.persistedTiles(false);
+            hybridRendering = {
+              architecture: "hybrid-v1",
+              tileSize: l.tileStore.tileSize,
+              strokes: ((_b = (_a2 = l.strokeStore) == null ? void 0 : _a2.serialize) == null ? void 0 : _b.call(_a2)) || null,
+              tiles
+            };
+            l._savedBlob = null;
+            l._rasterPath = null;
+            if (S._autosaveSerial === saveSerial) l._dirty = false;
+          } else if (l.imageReference) {
+            l._savedBlob = null;
+            l._rasterPath = null;
+            if (S._autosaveSerial === saveSerial) l._dirty = false;
+          } else if (l._dirty || !l._savedBlob) {
             let sourceCanvas = l.canvas;
             if (l.imageCanvas && !l.imageBaked && !l.pdf) {
               const tmp = document.createElement("canvas");
@@ -46720,17 +48502,27 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             name: l.name,
             visible: l.visible,
             opacity: l.opacity,
+            locked: (_d = (_c = engineLayer == null ? void 0 : engineLayer.locked) != null ? _c : l.locked) != null ? _d : false,
+            layerKind: (_e = engineLayer == null ? void 0 : engineLayer.layerKind) != null ? _e : "sketch",
+            canvasSourceId: l.canvasSourceId || null,
             trace: l.trace,
             blendMode: l.blendMode,
             blob: l._savedBlob,
             raster_path: l._rasterPath || null,
+            rendering: hybridRendering,
             pdf: l.pdf ? {
               ...l.pdf,
               transform: { ...l.imageTransform },
-              opacity: (_a2 = l.imageOpacity) != null ? _a2 : 1,
+              opacity: (_f = l.imageOpacity) != null ? _f : 1,
               rasterMode: "drawing-only"
             } : null,
-            pdfBlob: l.pdfBlob || null
+            pdfBlob: l.pdfBlob || null,
+            imageReference: l.imageReference ? {
+              ...l.imageReference,
+              transform: { ...l.imageTransform },
+              opacity: (_g = l.imageOpacity) != null ? _g : 1
+            } : null,
+            imageBlob: l.imageBlob || null
           });
         }
         const payload = {
@@ -46742,6 +48534,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           paperBg: state2.paperBg,
           grid: { show: state2.showGrid, type: state2.gridType, spacingMM: state2.gridSpacingMM },
           activeLayer: state2.activeLayer,
+          scaleCalibration: S.serializeScaleCalibration(),
           pxPerUnit: state2.pxPerUnit,
           scaleUnit: state2.scaleUnit,
           scaleLabel: S.scaleLabelFromState(),
@@ -46845,6 +48638,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           paperBg: payload.paperBg,
           grid: payload.grid,
           activeLayer: payload.activeLayer,
+          scaleCalibration: payload.scaleCalibration,
           pxPerUnit: payload.pxPerUnit,
           scaleUnit: payload.scaleUnit,
           scaleLabel: payload.scaleLabel,
@@ -47016,7 +48810,12 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           if (Array.isArray(local.masses)) merged.masses = local.masses;
           if (Array.isArray(local.measurements)) merged.measurements = local.measurements;
           if (local.massBaseAnchor) merged.massBaseAnchor = local.massBaseAnchor;
-          if (local.pxPerUnit) {
+          if (local.scaleCalibration) {
+            merged.scaleCalibration = local.scaleCalibration;
+            merged.pxPerUnit = local.pxPerUnit;
+            merged.scaleUnit = local.scaleUnit;
+            merged.scaleLabel = local.scaleLabel;
+          } else if (local.pxPerUnit) {
             merged.pxPerUnit = local.pxPerUnit;
             merged.scaleUnit = local.scaleUnit;
             merged.scaleLabel = local.scaleLabel;
@@ -47117,7 +48916,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return repaired;
     };
     S.applyLegacyDocument = async function applyLegacyDocument(saved) {
-      var _a2, _b, _c, _d, _e, _f, _g, _h;
+      var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
       if (!saved || typeof saved !== "object") {
         throw new Error("Document has no layers");
       }
@@ -47132,15 +48931,13 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.doc.dpi = dpi;
       S.doc.wPx = Math.round(S.doc.wMM / 25.4 * S.doc.dpi);
       S.doc.hPx = Math.round(S.doc.hMM / 25.4 * S.doc.dpi);
-      S.strokeCanvas.width = S.doc.wPx;
-      S.strokeCanvas.height = S.doc.hPx;
+      S.strokeCanvas.width = 1;
+      S.strokeCanvas.height = 1;
       const gc = $el("guide-canvas");
       if (gc) {
-        gc.width = S.doc.wPx;
-        gc.height = S.doc.hPx;
+        gc.width = state2.guideType && state2.guideType !== "none" ? S.doc.wPx : 1;
+        gc.height = state2.guideType && state2.guideType !== "none" ? S.doc.hPx : 1;
       }
-      S.gridCanvas.width = S.doc.wPx;
-      S.gridCanvas.height = S.doc.hPx;
       if (S.paper) {
         S.paper.style.width = S.doc.wPx + "px";
         S.paper.style.height = S.doc.hPx + "px";
@@ -47156,10 +48953,31 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const engineId = engineIds[i];
         const layer = engineId ? S.allocateLayerSurface(engineId, ld.name || `Layer ${i + 1}`) : S.createLayer(ld.name);
         layer.visible = ld.visible !== false;
+        layer.locked = ld.locked === true;
         layer.opacity = typeof ld.opacity === "number" ? ld.opacity : 1;
+        layer.canvasSourceId = ld.canvasSourceId || null;
         layer.trace = ld.trace || 0;
         layer.blendMode = ld.blendMode || "source-over";
         if (ld.raster_path) layer._rasterPath = ld.raster_path;
+        if (((_e = ld.rendering) == null ? void 0 : _e.architecture) === "hybrid-v1" && layer.tileStore) {
+          if (ld.rendering.strokes && ((_g = (_f = layer.strokeStore) == null ? void 0 : _f.constructor) == null ? void 0 : _g.fromSnapshot)) {
+            layer.strokeStore = layer.strokeStore.constructor.fromSnapshot(
+              ld.rendering.strokes
+            );
+            for (const stroke of layer.strokeStore.all()) {
+              (_i = (_h = S).renderRecordedStroke) == null ? void 0 : _i.call(_h, layer, stroke);
+            }
+          }
+          for (const tile of ld.rendering.tiles || []) {
+            const source = tile.blob instanceof Blob ? tile.blob : tile.url;
+            if (!source) continue;
+            try {
+              await layer.tileStore.importTile(tile, source);
+            } catch (error) {
+              console.warn("Layer tile restore failed", tile.key, error);
+            }
+          }
+        }
         if (ld.pdf) {
           layer.pdf = { ...ld.pdf, transform: { ...ld.pdf.transform } };
           layer.pdfBlob = ld.pdfBlob instanceof Blob ? ld.pdfBlob : null;
@@ -47170,10 +48988,22 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           layer.image = new Image();
           layer.image.src = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
         }
+        if (ld.imageReference) {
+          layer.imageReference = {
+            ...ld.imageReference,
+            transform: { ...ld.imageReference.transform }
+          };
+          layer.imageBlob = ld.imageBlob instanceof Blob ? ld.imageBlob : null;
+          layer.imageUrl = ld.image_url || ld.imageUrl || null;
+          layer.imageTransform = { ...ld.imageReference.transform };
+          layer.imageOpacity = typeof ld.imageReference.opacity === "number" ? ld.imageReference.opacity : 1;
+          layer.imageBaked = false;
+        }
         if (S.layerEngine && engineId) {
           const meta = S.layerEngine.getLayer(engineId);
           if (meta) {
             meta.visible = layer.visible;
+            meta.locked = layer.locked;
             meta.opacity = layer.opacity;
             meta.trace = layer.trace;
             meta.blendMode = layer.blendMode;
@@ -47190,15 +49020,32 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             console.warn("PDF source restore failed; using raster fallback", error);
           }
         }
-        if (blob) {
+        if (layer.imageReference && (layer.imageBlob || layer.imageUrl) && typeof S.loadImageReferenceRuntime === "function") {
+          try {
+            await S.loadImageReferenceRuntime(
+              layer,
+              layer.imageBlob || layer.imageUrl
+            );
+          } catch (error) {
+            console.warn("Image reference restore failed", error);
+          }
+        }
+        if (blob && !ld.rendering) {
           try {
             if (!duplicatePdfRasterIndexes.has(i) && shouldPaintPersistedLayerRaster(
               Boolean(layer.pdf),
               pdfRestored,
-              (_e = ld.pdf) == null ? void 0 : _e.rasterMode
+              (_j = ld.pdf) == null ? void 0 : _j.rasterMode
             )) {
               const bmp = await createImageBitmap(blob);
-              layer.ctx.drawImage(bmp, 0, 0);
+              if (layer.tileStore) {
+                layer.tileStore.forEachContext(
+                  { x: 0, y: 0, w: S.doc.wPx, h: S.doc.hPx },
+                  (ctx) => ctx.drawImage(bmp, 0, 0)
+                );
+              } else {
+                layer.ctx.drawImage(bmp, 0, 0);
+              }
               bmp.close && bmp.close();
             }
             layer._savedBlob = duplicatePdfRasterIndexes.has(i) ? null : blob;
@@ -47209,7 +49056,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           layer._dirty = true;
           layer._rasterPath = null;
         }
-        if (pdfRestored && ((_f = ld.pdf) == null ? void 0 : _f.rasterMode) !== "drawing-only") {
+        if (pdfRestored && ((_k = ld.pdf) == null ? void 0 : _k.rasterMode) !== "drawing-only") {
           layer._dirty = true;
           layer._savedBlob = null;
         }
@@ -47219,18 +49066,23 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       if (S.layerEngine) S.syncStateLayersFromEngine();
       const repairedCrossLayerPdf = S.repairCrossLayerPdfCopies();
-      state2.activeLayer = Math.min((_g = saved.activeLayer) != null ? _g : state2.layers.length - 1, state2.layers.length - 1);
-      if (S.layerEngine && ((_h = state2.layers[state2.activeLayer]) == null ? void 0 : _h.engineId)) {
+      state2.activeLayer = Math.min((_l = saved.activeLayer) != null ? _l : state2.layers.length - 1, state2.layers.length - 1);
+      if (S.layerEngine && ((_m = state2.layers[state2.activeLayer]) == null ? void 0 : _m.engineId)) {
         S.layerEngine.setActiveLayer(state2.layers[state2.activeLayer].engineId);
       }
-      if (saved.pxPerUnit) {
-        state2.pxPerUnit = saved.pxPerUnit;
-        state2.scaleUnit = saved.scaleUnit || "cm";
+      if (saved.scaleCalibration) {
+        S.setScaleCalibration(
+          saved.scaleCalibration,
+          saved.pxPerUnit,
+          saved.scaleUnit
+        );
+      } else if (saved.pxPerUnit) {
+        S.setScaleCalibration(null, saved.pxPerUnit, saved.scaleUnit || "cm");
       } else if (saved.scaleLabel) {
-        state2.pxPerUnit = null;
+        S.clearScaleCalibration();
         S.applyScaleFromLabel(saved.scaleLabel);
       } else {
-        state2.pxPerUnit = null;
+        S.clearScaleCalibration();
       }
       S.updateScaleDisplay();
       if (saved.infiniteCanvas != null) state2.infiniteCanvas = !!saved.infiniteCanvas;
@@ -47279,7 +49131,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     S._scaleSyncTimer = null;
     S.syncProjectScale = function syncProjectScale(label) {
       const pid = typeof window !== "undefined" ? window.__SKETCHTRUDE_PROJECT_ID : null;
-      if (!pid || pid === "local" || !label) return;
+      if (!pid || pid === "local") return;
       const cfg = window.__SKETCHTRUDE_PROJECT_CONFIG;
       if (cfg) cfg.scale_label = label;
       clearTimeout(S._scaleSyncTimer);
@@ -47296,11 +49148,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }, 400);
     };
     S.scaleLabelFromState = function scaleLabelFromState() {
-      if (!state2.pxPerUnit || !state2.scaleUnit) return null;
-      const unitInMm = { mm: 1, cm: 10, m: 1e3, in: 25.4, ft: 304.8 }[state2.scaleUnit] || 1;
-      const realPerPx_mm = unitInMm / state2.pxPerUnit;
-      const docPxPerMm = S.doc.wPx / S.doc.wMM;
-      const ratio = realPerPx_mm * docPxPerMm;
+      const ratio = S.scaleDenominator();
       if (!ratio || ratio <= 0) return null;
       return `1:${Math.round(ratio)}`;
     };
@@ -47311,14 +49159,20 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return label;
     };
     S.applyScaleFromLabel = function applyScaleFromLabel(label) {
-      if (!label || state2.pxPerUnit) return;
+      if (!label || S.hasCalibratedScale()) return;
       const m = String(label).match(/1\s*:\s*(\d+(?:\.\d+)?)/);
       if (!m) return;
       const ratio = parseFloat(m[1]);
       if (!ratio || ratio <= 0) return;
-      const docPxPerMm = S.doc.wPx / S.doc.wMM;
-      state2.pxPerUnit = 10 * docPxPerMm / ratio;
-      state2.scaleUnit = "cm";
+      const docUnitsPerPaperMM = S.doc.wPx / S.doc.wMM;
+      S.setScaleCalibration({
+        version: 1,
+        status: "calibrated",
+        mmPerDocumentUnit: ratio / docUnitsPerPaperMM,
+        method: "reference-line",
+        displayUnit: "cm",
+        reference: null
+      });
       S.updateScaleDisplay();
     };
     S.applyProjectConfig = function applyProjectConfig() {
@@ -47344,17 +49198,17 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         if (state2.paperBg) S.paper.style.background = state2.paperBg;
       }
       if (typeof S.strokeCanvas !== "undefined" && S.strokeCanvas) {
-        S.strokeCanvas.width = S.doc.wPx;
-        S.strokeCanvas.height = S.doc.hPx;
+        S.strokeCanvas.width = 1;
+        S.strokeCanvas.height = 1;
       }
       const gc = $el("guide-canvas");
       if (gc) {
-        gc.width = S.doc.wPx;
-        gc.height = S.doc.hPx;
+        gc.width = state2.guideType && state2.guideType !== "none" ? S.doc.wPx : 1;
+        gc.height = state2.guideType && state2.guideType !== "none" ? S.doc.hPx : 1;
       }
       if (typeof S.gridCanvas !== "undefined" && S.gridCanvas) {
-        S.gridCanvas.width = S.doc.wPx;
-        S.gridCanvas.height = S.doc.hPx;
+        S.gridCanvas.width = state2.showGrid ? S.doc.wPx : 1;
+        S.gridCanvas.height = state2.showGrid ? S.doc.hPx : 1;
       }
       S.updateDocInfo(S.paperFormatName(S.doc.wMM, S.doc.hMM));
       const bg = meta.paper_bg;
@@ -47443,11 +49297,9 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.injectHatchTab();
       const _gc = $el("guide-canvas");
       if (_gc) {
-        _gc.width = S.doc.wPx;
-        _gc.height = S.doc.hPx;
+        _gc.width = state2.guideType && state2.guideType !== "none" ? S.doc.wPx : 1;
+        _gc.height = state2.guideType && state2.guideType !== "none" ? S.doc.hPx : 1;
       }
-      S.gridCanvas.width = S.doc.wPx;
-      S.gridCanvas.height = S.doc.hPx;
       S.drawDocGrid();
       if (state2.guideType && state2.guideType !== "none" && typeof S.drawGuideGrid === "function") S.drawGuideGrid();
       const ovfSym = $el("ovf-symmetry");
@@ -47472,6 +49324,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     initDom();
     initCores();
     initState();
+    initScaleSystem();
     initViewport();
     initLayers();
     initStrokeInput();

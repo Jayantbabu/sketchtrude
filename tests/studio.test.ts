@@ -60,7 +60,8 @@ describe("paper templates", () => {
 describe("2D zoom helpers", () => {
   it("clamps zoom within bounds", () => {
     expect(clampZoom(0.05)).toBe(0.2);
-    expect(clampZoom(20)).toBe(8);
+    expect(clampZoom(20)).toBe(20);
+    expect(clampZoom(100)).toBe(64);
     expect(clampZoom(1)).toBe(1);
   });
 

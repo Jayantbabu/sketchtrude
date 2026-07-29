@@ -1,4 +1,5 @@
 /** Core runtime types for the studio engine (expanded as modules are typed). */
+import type { ScaleCalibration } from "../../lib/scale-system";
 
 export type DocConfig = {
   wMM: number;
@@ -42,6 +43,32 @@ export type VectorHistoryEntry = {
 };
 
 export type HistoryEntry = RegionHistoryEntry | VectorHistoryEntry;
+
+export type TileHistoryEntry = {
+  tiles: Array<{
+    key: string;
+    column: number;
+    row: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    before: ImageData;
+    after: ImageData;
+  }>;
+  vectorTiles?: Array<{
+    key: string;
+    column: number;
+    row: number;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    before: ImageData;
+    after: ImageData;
+  }>;
+  stroke?: Record<string, unknown> | null;
+};
 
 /** 2D plan opening on a wall polyline segment. */
 export type Opening2D = {
@@ -166,8 +193,8 @@ export type EngineLayer = {
   opacity: number;
   trace: number;
   blendMode: string;
-  history: HistoryEntry[];
-  redo: HistoryEntry[];
+  history: Array<HistoryEntry | TileHistoryEntry>;
+  redo: Array<HistoryEntry | TileHistoryEntry>;
   _cur?: ImageData | null;
   _dirty?: boolean;
   _savedBlob?: Blob | null;
@@ -231,6 +258,7 @@ export type EngineState = {
   snapshot: ImageData | null;
   pxPerUnit: number | null;
   scaleUnit: string;
+  scaleCalibration: ScaleCalibration;
   measurements: Measurement[];
   showGrid: boolean;
   gridType: string;
@@ -259,6 +287,7 @@ export type EngineState = {
   pendingScale: boolean;
   pendingScaleStart: Point2 | null;
   pendingScaleEnd: Point2 | null;
+  scaleResumeTool?: string | null;
   selectedStencil: unknown;
   customStencils: unknown[];
   customHatches: unknown[];
