@@ -13,6 +13,14 @@ export function initLayers() {
   S.capHistory = capHistory;
   GlobalWorkerOptions.workerSrc = '/engine/pdf.worker.min.mjs';
 
+  S.isProtectedReferenceLayer = function isProtectedReferenceLayer(layer: any) {
+    if (!layer) return false;
+    const meta = layer.engineId && S.layerEngine
+      ? S.layerEngine.getLayer(layer.engineId)
+      : null;
+    return meta?.layerKind === 'reference' || layer.renderMode === 'reference';
+  }
+
   /* =================== LAYERS =================== */
   S.createLayer = function createLayer(name: any, opts: any) {
     opts = opts || {};
@@ -63,6 +71,13 @@ export function initLayers() {
     return new Promise<any>((resolve, reject) => {
       const img = new Image();
       img.onload = () => {
+        if (
+          replaceLayer &&
+          S.isProtectedReferenceLayer(replaceLayer) &&
+          !options.allowReferenceReplace
+        ) {
+          replaceLayer = null;
+        }
         const targetLayer = replaceLayer || S.createLayer(String(name || 'Image').slice(0, 32));
         if (targetLayer.pdf) {
           try { if (targetLayer.pdfRenderTask) targetLayer.pdfRenderTask.cancel(); } catch (_) {}
@@ -112,18 +127,30 @@ export function initLayers() {
     });
   }
 
+  S._pdfUploadCache = new WeakMap<object, Promise<any>>();
   S.uploadPdfAsset = async function uploadPdfAsset(blob: any) {
     const pid = typeof window !== 'undefined' ? (window as any).__SKETCHTRUDE_PROJECT_ID : null;
     if (!pid || pid === 'local' || !blob) return null;
-    const form = new FormData();
-    form.append('file', blob, blob.name || 'source.pdf');
-    const response = await fetch(`/api/projects/${pid}/assets/pdf`, {
-      method: 'POST',
-      body: form,
-      credentials: 'same-origin',
-    });
-    if (!response.ok) throw new Error(await response.text());
-    return response.json();
+    const cached = S._pdfUploadCache.get(blob);
+    if (cached) return cached;
+    const upload = (async () => {
+      const form = new FormData();
+      form.append('file', blob, blob.name || 'source.pdf');
+      const response = await fetch(`/api/projects/${pid}/assets/pdf`, {
+        method: 'POST',
+        body: form,
+        credentials: 'same-origin',
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    })();
+    S._pdfUploadCache.set(blob, upload);
+    try {
+      return await upload;
+    } catch (error) {
+      S._pdfUploadCache.delete(blob);
+      throw error;
+    }
   }
 
   S.uploadImageAsset = async function uploadImageAsset(blob: any) {
@@ -442,7 +469,7 @@ export function initLayers() {
       (layer.imageCtx as any).clearRect(0, 0, S.doc.wPx, S.doc.hPx);
       await S.renderPdfLayer(layer, true);
       S.updateLayerOrder();
-      S.uploadPdfAsset(file).then((asset: any) => {
+      S.uploadPdfAsset(pdfBlob).then((asset: any) => {
         if (!asset || !layer.pdf) return;
         layer.pdf.storagePath = asset.storagePath;
         layer.pdfUrl = asset.signedUrl;
@@ -468,6 +495,14 @@ export function initLayers() {
     if (!replaceLayer && state.replaceImageInLayer) {
       replaceLayer = state.replaceImageInLayer;
       state.replaceImageInLayer = null;
+    }
+    if (
+      replaceLayer &&
+      S.isProtectedReferenceLayer(replaceLayer) &&
+      !options.allowReferenceReplace
+    ) {
+      replaceLayer = null;
+      S.showHint('The source Reference is protected · imported into a new editable layer');
     }
     if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) {
       return S.importPdfAsLayer(file, replaceLayer, options);
@@ -524,7 +559,7 @@ export function initLayers() {
     const activeSurface = S.activeLayer();
     const activeEngineId = activeSurface?.engineId || S.layerEngine?.getSketchLayerId?.();
     const baseName = String(file.name || 'Reference').replace(/\.[^.]+$/, '').slice(0, 48);
-    const sourceName = `${options.kind === 'pdf' ? 'PDF' : 'Image'} · ${baseName || 'Reference'}`;
+    const sourceName = `${options.kind === 'pdf' ? 'PDF Reference' : 'Image Reference'} · ${baseName || 'Source'}`;
     const reference = S.createLayer(sourceName, {
       layerKind: 'reference',
       locked: true,
@@ -538,6 +573,7 @@ export function initLayers() {
         pageNumber: options.pageNumber || 1,
         suppressHint: true,
         throwOnError: true,
+        allowReferenceReplace: true,
       });
       if (!imported) throw new Error('The canvas source could not be imported');
     } catch (error) {
@@ -556,15 +592,45 @@ export function initLayers() {
         meta.locked = true;
       }
     }
-    if (activeEngineId && S.layerEngine?.getLayer(activeEngineId)) {
-      S.layerEngine.setActiveLayer(activeEngineId);
+    let editableCopy: any = null;
+    if (options.kind === 'pdf' && reference.pdf && reference.pdfBlob) {
+      const copyName = `PDF · ${baseName || 'Reference'} · Editable`;
+      editableCopy = S.createLayer(copyName, { layerKind: 'sketch' });
+      editableCopy.canvasSourceId = sourceId ? `${sourceId}:editable` : null;
+      editableCopy.pdf = {
+        ...reference.pdf,
+        storagePath: reference.pdf.storagePath || null,
+        transform: { ...reference.imageTransform },
+      };
+      editableCopy.pdfBlob = reference.pdfBlob;
+      editableCopy.pdfUrl = reference.pdfUrl || null;
+      editableCopy.imageTransform = { ...reference.imageTransform };
+      editableCopy.imageOpacity = reference.imageOpacity ?? 1;
+      editableCopy.imageBaked = false;
+      editableCopy.image = new Image();
+      editableCopy.image.src =
+        'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+      await S.loadPdfRuntime(editableCopy, editableCopy.pdfBlob);
+      S.uploadPdfAsset(editableCopy.pdfBlob).then((asset: any) => {
+        if (!asset || !editableCopy?.pdf) return;
+        editableCopy.pdf.storagePath = asset.storagePath;
+        editableCopy.pdfUrl = asset.signedUrl;
+        S.scheduleAutosave();
+      }).catch((error: any) => console.warn('Editable PDF upload deferred', error));
+    }
+
+    const nextActiveEngineId = editableCopy?.engineId || activeEngineId;
+    if (nextActiveEngineId && S.layerEngine?.getLayer(nextActiveEngineId)) {
+      S.layerEngine.setActiveLayer(nextActiveEngineId);
       S.syncStateLayersFromEngine();
     }
     S.updateLayerOrder();
     S.renderLayers();
     S.updateUI();
     S.scheduleAutosave();
-    S.showHint('Canvas source added as a locked Reference layer');
+    S.showHint(editableCopy
+      ? 'PDF added as a locked Reference plus an editable transformable copy'
+      : 'Canvas source added as a locked Reference layer');
     return reference;
   }
 
@@ -918,8 +984,8 @@ export function initLayers() {
     if (typeof S.showOpeningPalette === 'function') S.showOpeningPalette(state.tool === 'opening');
     if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms();
     if (typeof S.refreshMeasurements === 'function') S.refreshMeasurements();
-    if (typeof S.syncWallsToMasses === 'function') S.syncWallsToMasses();
     if (typeof S.syncSceneObjectsToEngine === 'function') S.syncSceneObjectsToEngine();
+    if (typeof S.syncWallsToMasses === 'function') S.syncWallsToMasses();
     if (typeof S.renderSchedule === 'function') S.renderSchedule();
   }
   S._lastVecPush = 0;
@@ -1161,6 +1227,7 @@ export function initLayers() {
         const meta = S.layerEngine.getLayer(row.id);
         const surf = S.surfaceByEngineId(row.id);
         const idx = surf ? state.layers.indexOf(surf) : -1;
+        const referenceOnly = row.layerKind === 'reference';
         const hasUnbakedImage = surf && surf.image && !surf.imageBaked;
         const pad = 10 + row.depth * 12;
         const kindLabel = row.layerKind === 'object' ? 'LAYER' : (row.layerKind || 'layer').toUpperCase();
@@ -1186,15 +1253,15 @@ export function initLayers() {
                 ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
                 : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'}
             </button>
-            <button class="layer-act ${row.locked ? 'on' : 'off'}" data-action="lock" data-id="${row.id}" title="Lock">
+            ${referenceOnly ? '' : `<button class="layer-act ${row.locked ? 'on' : 'off'}" data-action="lock" data-id="${row.id}" title="Lock">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-            </button>
-            ${surf ? `<button class="layer-act" data-action="menu" data-idx="${idx}" title="Layer options">
+            </button>`}
+            ${surf && !referenceOnly ? `<button class="layer-act" data-action="menu" data-idx="${idx}" title="Layer options">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
             </button>` : ''}
-            <button class="layer-act" data-action="del" data-id="${row.id}" ${((row.layerKind === 'sketch' && drawableIds.length <= 1) || row.layerKind === 'object') ? 'style="opacity:.2;pointer-events:none"' : ''}>
+            ${referenceOnly ? '' : `<button class="layer-act" data-action="del" data-id="${row.id}" ${((row.layerKind === 'sketch' && drawableIds.length <= 1) || row.layerKind === 'object') ? 'style="opacity:.2;pointer-events:none"' : ''}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
-            </button>
+            </button>`}
           </div>`;
 
         if (surf) {
@@ -1226,25 +1293,27 @@ export function initLayers() {
         });
 
         const nameEl: any = div.querySelector('.layer-name');
-        nameEl.addEventListener('dblclick', () => {
-          nameEl.contentEditable = 'true';
-          nameEl.focus();
-          const range = document.createRange();
-          range.selectNodeContents(nameEl);
-          const sel: any = window.getSelection();
-          sel.removeAllRanges();
-          sel.addRange(range);
-        });
-        nameEl.addEventListener('blur', () => {
-          const next = nameEl.textContent.trim() || 'Layer';
-          S.layerEngine.renameLayer(row.id, next);
-          if (surf) surf.name = next;
-          nameEl.contentEditable = 'false';
-          S.renderLayers();
-        });
-        nameEl.addEventListener('keydown', (e: any) => {
-          if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); }
-        });
+        if (!referenceOnly) {
+          nameEl.addEventListener('dblclick', () => {
+            nameEl.contentEditable = 'true';
+            nameEl.focus();
+            const range = document.createRange();
+            range.selectNodeContents(nameEl);
+            const sel: any = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          });
+          nameEl.addEventListener('blur', () => {
+            const next = nameEl.textContent.trim() || 'Layer';
+            S.layerEngine.renameLayer(row.id, next);
+            if (surf) surf.name = next;
+            nameEl.contentEditable = 'false';
+            S.renderLayers();
+          });
+          nameEl.addEventListener('keydown', (e: any) => {
+            if (e.key === 'Enter') { e.preventDefault(); nameEl.blur(); }
+          });
+        }
 
         div.querySelectorAll('.layer-act').forEach((btn: any) => {
           btn.addEventListener('click', (e: any) => {
@@ -1262,6 +1331,7 @@ export function initLayers() {
               S.syncStateLayersFromEngine();
             } else if (action === 'lock') {
               const layer = S.layerEngine.getLayer(id);
+              if (layer?.layerKind === 'reference') return;
               S.layerEngine.setLayerLocked(id, !(layer && layer.locked));
               S.syncStateLayersFromEngine();
             } else if (action === 'menu') {
@@ -1538,6 +1608,10 @@ export function initLayers() {
   }
   S.openLayerMenu = function openLayerMenu(idx: any, anchor: any) {
     S.closeLayerMenu();
+    if (S.isProtectedReferenceLayer(state.layers[idx])) {
+      S.showHint('The source Reference can only be shown or hidden');
+      return;
+    }
     const items = [
       { label: 'Move up', fn: () => S.moveLayer(idx, +1), disabled: idx === state.layers.length - 1 },
       { label: 'Move down', fn: () => S.moveLayer(idx, -1), disabled: idx === 0 },

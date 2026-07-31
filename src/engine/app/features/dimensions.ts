@@ -115,12 +115,28 @@ export function initDimensions() {
 
     // Endpoint dots — non-interactive
     [[m.x1,m.y1],[m.x2,m.y2]].forEach(([x,y]) => {
+      if (settingScale) {
+        const crosshairSize = calibrationMetrics.endpointRadius;
+        [
+          [x - crosshairSize, y - crosshairSize, x + crosshairSize, y + crosshairSize],
+          [x - crosshairSize, y + crosshairSize, x + crosshairSize, y - crosshairSize],
+        ].forEach(([x1, y1, x2, y2]) => {
+          const line = document.createElementNS(svgns, 'line');
+          line.setAttribute('x1', String(x1));
+          line.setAttribute('y1', String(y1));
+          line.setAttribute('x2', String(x2));
+          line.setAttribute('y2', String(y2));
+          line.setAttribute('stroke', color);
+          line.setAttribute('stroke-width', String(calibrationMetrics.tickStrokeWidth));
+          line.setAttribute('stroke-linecap', 'round');
+          line.setAttribute('pointer-events', 'none');
+          S.rulerOverlay.appendChild(line);
+        });
+        return;
+      }
       const c = document.createElementNS(svgns, 'circle');
       c.setAttribute('cx', String(x)); c.setAttribute('cy', String(y));
-      c.setAttribute(
-        'r',
-        String(settingScale ? calibrationMetrics.endpointRadius : 7),
-      );
+      c.setAttribute('r', '7');
       c.setAttribute('fill', color);
       c.setAttribute('pointer-events', 'none');
       S.rulerOverlay.appendChild(c);

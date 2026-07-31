@@ -2,6 +2,8 @@ import type { EngineDocumentAdapter } from "@/engine/document/engine-document-ad
 import type { EngineDocumentChangeEvent } from "@/engine/document/engine-document-events";
 import {
   createEmptyProjectDocument,
+  type LegacyStudioDocument,
+  type LegacyStudioLayerMeta,
   type ProjectDocument,
 } from "@/features/projects/domain/project-document";
 import { migrateProjectDocument } from "@/features/projects/domain/project-document-migrations";
@@ -45,6 +47,115 @@ export type ProjectLoadResult = {
   document: ProjectDocument | null;
   error?: string;
 };
+
+/**
+ * Local recovery snapshots intentionally contain storage paths but not signed
+ * URLs. When a newer local snapshot wins recovery, borrow only the transient
+ * URLs from the cloud candidate so source PDFs/images can be reopened without
+ * replacing any newer local drawing state.
+ */
+export function mergeTransientLayerAssetUrls(
+  localDocument: ProjectDocument,
+  cloudDocument: ProjectDocument | null | undefined,
+): ProjectDocument {
+  const localLegacy = localDocument.extensions?.legacyStudio as
+    | LegacyStudioDocument
+    | undefined;
+  const cloudLegacy = cloudDocument?.extensions?.legacyStudio as
+    | LegacyStudioDocument
+    | undefined;
+  if (!localLegacy?.layers?.length || !cloudLegacy?.layers?.length) {
+    return localDocument;
+  }
+
+  const cloudById = new Map<string, LegacyStudioLayerMeta>();
+  cloudLegacy.layers.forEach((layer) => {
+    if (typeof layer.layer_id === "string" && layer.layer_id) {
+      cloudById.set(layer.layer_id, layer);
+    }
+  });
+
+  let changed = false;
+  const layers = localLegacy.layers.map((localLayer, index) => {
+    const cloudLayer =
+      (typeof localLayer.layer_id === "string"
+        ? cloudById.get(localLayer.layer_id)
+        : undefined) ?? cloudLegacy.layers[index];
+    if (!cloudLayer) return localLayer;
+
+    const next = { ...localLayer };
+    const localPdf = localLayer.pdf as { storagePath?: string | null } | null | undefined;
+    const cloudPdf = cloudLayer.pdf as { storagePath?: string | null } | null | undefined;
+    if (
+      localPdf?.storagePath &&
+      localPdf.storagePath === cloudPdf?.storagePath &&
+      typeof cloudLayer.pdf_url === "string" &&
+      cloudLayer.pdf_url
+    ) {
+      next.pdf_url = cloudLayer.pdf_url;
+      changed = true;
+    }
+
+    if (
+      localLayer.imageReference?.storagePath &&
+      localLayer.imageReference.storagePath ===
+        cloudLayer.imageReference?.storagePath &&
+      typeof cloudLayer.image_url === "string" &&
+      cloudLayer.image_url
+    ) {
+      next.image_url = cloudLayer.image_url;
+      changed = true;
+    }
+
+    if (
+      localLayer.raster_path &&
+      localLayer.raster_path === cloudLayer.raster_path &&
+      typeof cloudLayer.raster_url === "string" &&
+      cloudLayer.raster_url
+    ) {
+      next.raster_url = cloudLayer.raster_url;
+      changed = true;
+    }
+
+    if (
+      localLayer.rendering?.architecture === "hybrid-v1" &&
+      cloudLayer.rendering?.architecture === "hybrid-v1"
+    ) {
+      const cloudTiles = new Map(
+        cloudLayer.rendering.tiles.map((tile) => [tile.key, tile]),
+      );
+      let renderingChanged = false;
+      const tiles = localLayer.rendering.tiles.map((tile) => {
+        const cloudTile = cloudTiles.get(tile.key);
+        if (
+          tile.storagePath &&
+          tile.storagePath === cloudTile?.storagePath &&
+          typeof cloudTile.url === "string" &&
+          cloudTile.url
+        ) {
+          renderingChanged = true;
+          return { ...tile, url: cloudTile.url };
+        }
+        return tile;
+      });
+      if (renderingChanged) {
+        next.rendering = { ...localLayer.rendering, tiles };
+        changed = true;
+      }
+    }
+
+    return next;
+  });
+
+  if (!changed) return localDocument;
+  return {
+    ...localDocument,
+    extensions: {
+      ...localDocument.extensions,
+      legacyStudio: { ...localLegacy, layers },
+    },
+  };
+}
 
 /**
  * Loads local + cloud candidates, applies recovery selection, imports into the
@@ -176,7 +287,10 @@ export class ProjectLoadController {
       this.setStatus("conflict");
       // Prefer keeping local editable; mark conflict on the save controller.
       const localDoc = this.localSnapshot?.document
-        ? migrateProjectDocument(this.localSnapshot.document)
+        ? mergeTransientLayerAssetUrls(
+            migrateProjectDocument(this.localSnapshot.document),
+            this.cloudLoaded?.document,
+          )
         : null;
       if (localDoc) {
         await this.importGuarded(localDoc);
@@ -240,7 +354,10 @@ export class ProjectLoadController {
         if (!this.localSnapshot?.document) {
           throw new ProjectLoadError("Local snapshot missing document");
         }
-        document = migrateProjectDocument(this.localSnapshot.document);
+        document = mergeTransientLayerAssetUrls(
+          migrateProjectDocument(this.localSnapshot.document),
+          this.cloudLoaded?.document,
+        );
         baseServerRevision = this.localSnapshot.baseServerRevision;
         mutationVersion = this.localSnapshot.localMutationVersion;
         lastSyncedMutationVersion =

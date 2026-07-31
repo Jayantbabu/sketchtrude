@@ -249,6 +249,13 @@ export function initState() {
       });
       if (oid) wanted.add(oid);
     });
+    const roomIdByWallId = new Map<string, string>();
+    (state.wallRooms || []).forEach((room: any) => {
+      if (!room?.id) return;
+      (room.wallIds || []).forEach((wallId: string) => {
+        if (wallId) roomIdByWallId.set(wallId, room.id);
+      });
+    });
 
     (state.walls || []).forEach((wall: any, wallIndex: any) => {
       S.ensureWallId(wall);
@@ -259,9 +266,11 @@ export function initState() {
         wall.name = 'Wall ' + wallNum;
       }
       let parentObjectId: string | null = null;
-      if (wall.roomId) {
+      const canonicalRoomId = roomIdByWallId.get(wall.id) || null;
+      wall.roomId = canonicalRoomId;
+      if (canonicalRoomId) {
         const roomObj = S.findEngineObjectByLegacy
-          ? S.findEngineObjectByLegacy((r: any) => r.kind === 'wall-room' && r.id === wall.roomId)
+          ? S.findEngineObjectByLegacy((r: any) => r.kind === 'wall-room' && r.id === canonicalRoomId)
           : null;
         if (roomObj) parentObjectId = roomObj.id;
       }
@@ -462,6 +471,8 @@ export function initState() {
       const fam = S.brushLibraryEngine.familyOf(id);
       if (fam) return fam;
     }
+    const brush = S.BUILTIN_BRUSHES.find((item: any) => item.id === id);
+    if (brush?.family) return brush.family;
     for (const fam in S.BRUSH_FAMILIES) {
       if (S.BRUSH_FAMILIES[fam].includes(id)) return fam;
       for (const parentId of S.BRUSH_FAMILIES[fam]) {

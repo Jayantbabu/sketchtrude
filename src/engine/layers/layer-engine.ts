@@ -250,7 +250,7 @@ export class LayerEngine {
         layerKind: ld.layerKind ?? "sketch",
         floorId,
         visible: ld.visible !== false,
-        locked: ld.locked,
+        locked: (ld.layerKind ?? "sketch") === "reference" ? true : ld.locked,
         opacity: typeof ld.opacity === "number" ? ld.opacity : 1,
         blendMode: ld.blendMode,
       });
@@ -364,7 +364,9 @@ export class LayerEngine {
       floorId,
       parentLayerId,
       visible: options.visible ?? true,
-      locked: options.locked ?? caps.lockByDefault,
+      locked: layerKind === "reference"
+        ? true
+        : options.locked ?? caps.lockByDefault,
       opacity: options.opacity ?? 1,
       order: 0,
       blendMode: options.blendMode ?? "source-over",
@@ -433,6 +435,10 @@ export class LayerEngine {
   setLayerLocked(layerId: string, locked: boolean): void {
     const layer = this.layers[layerId];
     if (!layer) return;
+    if (layer.layerKind === "reference") {
+      layer.locked = true;
+      return;
+    }
     layer.locked = locked;
     this.emit({ type: "layer-updated", layerId });
     this.bump("layer-lock");
@@ -441,6 +447,7 @@ export class LayerEngine {
   setLayerOpacity(layerId: string, opacity: number): void {
     const layer = this.layers[layerId];
     if (!layer) return;
+    if (!getLayerCapabilities(layer.layerKind).supportsOpacity) return;
     layer.opacity = clamp01(opacity);
     this.emit({ type: "layer-updated", layerId });
     this.bump("layer-opacity");

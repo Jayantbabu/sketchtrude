@@ -154,7 +154,7 @@
   .puck-slider-val{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;color:rgba(255,255,255,0.55);min-width:24px;text-align:right;}
   .puck-preview{padding:10px 14px 10px 4px;}
   .puck-preview svg{display:block;}
-  #brush-preset-menu{position:fixed;z-index:1750;display:flex;flex-direction:column;gap:3px;min-width:210px;padding:7px;background:#1c1a18;border:1px solid rgba(255,255,255,.13);border-radius:13px;box-shadow:0 16px 42px rgba(0,0,0,.48);}
+  #brush-preset-menu{position:fixed;z-index:1750;display:flex;flex-direction:column;gap:3px;min-width:210px;max-height:min(70vh,560px);overflow-y:auto;overscroll-behavior:contain;padding:7px;background:#1c1a18;border:1px solid rgba(255,255,255,.13);border-radius:13px;box-shadow:0 16px 42px rgba(0,0,0,.48);}
   .bpm-title{padding:7px 10px 5px;color:rgba(255,255,255,.38);font:700 8px 'JetBrains Mono',monospace;letter-spacing:1.5px;text-transform:uppercase;}
   .bpm-item{display:flex;align-items:center;gap:11px;width:100%;border:0;background:transparent;color:#e8e4de;text-align:left;font:600 11px ui-sans-serif,system-ui;padding:9px 10px;border-radius:9px;cursor:pointer;}
   .bpm-item:hover,.bpm-item.on{background:var(--brand);color:#fff;}
@@ -416,7 +416,7 @@
   .brush-row-edit svg{width:13px;height:13px;}
 
   /* PUCK internals — old classes still referenced */
-  .puck-name{font-size:11px;font-weight:700;color:rgba(255,255,255,0.92);letter-spacing:0.5px;cursor:pointer;white-space:nowrap;text-transform:uppercase;}
+  .puck-name{appearance:none;border:0;background:transparent;padding:0;font:700 11px ui-sans-serif,system-ui;color:rgba(255,255,255,0.92);letter-spacing:0.5px;cursor:pointer;white-space:nowrap;text-transform:uppercase;}
   .puck-name:hover{color:#fff;}
   .puck-color{width:30px;height:30px;border-radius:50%;border:2.5px solid rgba(255,255,255,0.22);cursor:pointer;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,0.35);transition:transform .12s;}
   .puck-color:hover{transform:scale(1.08);}

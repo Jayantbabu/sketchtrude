@@ -44,16 +44,16 @@ const ARCHITECTURE: LayerCapabilities = {
 
 const REFERENCE: LayerCapabilities = {
   canDraw: false,
-  canHostObjects: true,
-  showChildrenInPanel: true,
+  canHostObjects: false,
+  showChildrenInPanel: false,
   lockByDefault: true,
   exportByDefault: true,
-  supportsBlendMode: true,
-  supportsOpacity: true,
+  supportsBlendMode: false,
+  supportsOpacity: false,
   supportsMerge: false,
   supportsRasterize: false,
-  supportsTransformWholeLayer: true,
-  defaultObjectSelectable: true,
+  supportsTransformWholeLayer: false,
+  defaultObjectSelectable: false,
 };
 
 const MEASUREMENT: LayerCapabilities = {

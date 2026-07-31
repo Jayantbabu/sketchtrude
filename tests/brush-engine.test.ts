@@ -108,6 +108,13 @@ describe("resolveStrokeParams", () => {
     expect(ids.has("charcoal")).toBe(true);
   });
 
+  it("exposes every preset through its declared pen or pencil family", () => {
+    const lib = createBrushLibrary();
+    expect(lib.familyOf("tech-xfine")).toBe("pen");
+    expect(lib.familyOf("pencil-rough")).toBe("pencil");
+    expect(lib.familyMembers("pen").some((brush) => brush.id === "tech-heavy")).toBe(true);
+  });
+
   it("converts scale-aware mm lineweight to document pixels", () => {
     const brush = BUILTIN_BRUSH_PRESETS.find((b) => b.id === "scalepen-medium")!;
     const params = resolveStrokeParams(brush, 0.5, {

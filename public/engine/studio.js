@@ -710,16 +710,16 @@
   };
   var REFERENCE = {
     canDraw: false,
-    canHostObjects: true,
-    showChildrenInPanel: true,
+    canHostObjects: false,
+    showChildrenInPanel: false,
     lockByDefault: true,
     exportByDefault: true,
-    supportsBlendMode: true,
-    supportsOpacity: true,
+    supportsBlendMode: false,
+    supportsOpacity: false,
     supportsMerge: false,
     supportsRasterize: false,
-    supportsTransformWholeLayer: true,
-    defaultObjectSelectable: true
+    supportsTransformWholeLayer: false,
+    defaultObjectSelectable: false
   };
   var MEASUREMENT = {
     canDraw: false,
@@ -1378,7 +1378,7 @@
      * Returns engine ids aligned 1:1 with `legacyLayers` for surface allocation.
      */
     rebuildFromLegacyLayers(legacyLayers, activeIndex = 0) {
-      var _a2, _b, _c, _d;
+      var _a2, _b, _c, _d, _e;
       this.floors = {};
       this.layers = {};
       this.objects = {};
@@ -1405,13 +1405,13 @@
           layerKind: (_b = ld.layerKind) != null ? _b : "sketch",
           floorId,
           visible: ld.visible !== false,
-          locked: ld.locked,
+          locked: ((_c = ld.layerKind) != null ? _c : "sketch") === "reference" ? true : ld.locked,
           opacity: typeof ld.opacity === "number" ? ld.opacity : 1,
           blendMode: ld.blendMode
         });
         const layer = this.layers[id];
         if (typeof ld.trace === "number") layer.trace = ld.trace;
-        layer.rasterPath = (_c = ld.raster_path) != null ? _c : null;
+        layer.rasterPath = (_d = ld.raster_path) != null ? _d : null;
         engineIds.push(id);
         if (!this._sketchLayerId && layer.layerKind === "sketch") {
           this._sketchLayerId = id;
@@ -1431,7 +1431,7 @@
       const requestedActive = engineIds[clamped];
       const requestedLayer = this.layers[requestedActive];
       this.setActiveLayer(
-        requestedLayer && getLayerCapabilities(requestedLayer.layerKind).canDraw ? requestedActive : (_d = this._sketchLayerId) != null ? _d : requestedActive
+        requestedLayer && getLayerCapabilities(requestedLayer.layerKind).canDraw ? requestedActive : (_e = this._sketchLayerId) != null ? _e : requestedActive
       );
       return engineIds;
     }
@@ -1503,7 +1503,7 @@
         floorId,
         parentLayerId,
         visible: (_g = options.visible) != null ? _g : true,
-        locked: (_h = options.locked) != null ? _h : caps.lockByDefault,
+        locked: layerKind === "reference" ? true : (_h = options.locked) != null ? _h : caps.lockByDefault,
         opacity: (_i = options.opacity) != null ? _i : 1,
         order: 0,
         blendMode: (_j = options.blendMode) != null ? _j : "source-over",
@@ -1560,6 +1560,10 @@
     setLayerLocked(layerId, locked) {
       const layer = this.layers[layerId];
       if (!layer) return;
+      if (layer.layerKind === "reference") {
+        layer.locked = true;
+        return;
+      }
       layer.locked = locked;
       this.emit({ type: "layer-updated", layerId });
       this.bump("layer-lock");
@@ -1567,6 +1571,7 @@
     setLayerOpacity(layerId, opacity) {
       const layer = this.layers[layerId];
       if (!layer) return;
+      if (!getLayerCapabilities(layer.layerKind).supportsOpacity) return;
       layer.opacity = clamp01(opacity);
       this.emit({ type: "layer-updated", layerId });
       this.bump("layer-opacity");
@@ -3225,6 +3230,8 @@
     }
     familyOf(id) {
       var _a2;
+      const brush = this.get(id);
+      if (brush == null ? void 0 : brush.family) return brush.family;
       for (const [fam, ids] of Object.entries(BRUSH_FAMILIES)) {
         if (ids.includes(id)) return fam;
         for (const parentId of ids) {
@@ -3234,9 +3241,7 @@
       return null;
     }
     familyMembers(family) {
-      var _a2;
-      const ids = (_a2 = BRUSH_FAMILIES[family]) != null ? _a2 : [];
-      return ids.map((id) => this.get(id)).filter((b) => Boolean(b));
+      return this.all().filter((brush) => brush.family === family);
     }
   };
   function createBrushLibrary(options) {
@@ -3740,9 +3745,68 @@
       const existing = this.tiles.get(coordinate.key);
       if (existing) {
         existing.lastUsed = ++this.clock;
+        this.reconcileTile(existing, coordinate);
         return existing;
       }
       return create ? this.createTile(coordinate) : null;
+    }
+    reconcileTile(tile, coordinate) {
+      var _a2;
+      if (tile.x === coordinate.x && tile.y === coordinate.y && tile.width === coordinate.width && tile.height === coordinate.height) {
+        return;
+      }
+      const previous = this.createCanvas(tile.width, tile.height);
+      (_a2 = previous.getContext("2d")) == null ? void 0 : _a2.drawImage(tile.canvas, 0, 0);
+      tile.canvas.width = coordinate.width;
+      tile.canvas.height = coordinate.height;
+      tile.canvas.style.left = `${coordinate.x}px`;
+      tile.canvas.style.top = `${coordinate.y}px`;
+      tile.canvas.style.width = `${coordinate.width}px`;
+      tile.canvas.style.height = `${coordinate.height}px`;
+      tile.context = tile.canvas.getContext("2d", {
+        willReadFrequently: true
+      });
+      tile.context.lineCap = "round";
+      tile.context.lineJoin = "round";
+      tile.context.drawImage(previous, 0, 0);
+      Object.assign(tile, coordinate);
+      tile.dirty = true;
+      tile.persistedBlob = null;
+    }
+    /**
+     * Change the sparse document bounds without allocating a document-sized
+     * bitmap. Existing tiles stay at their document coordinates; only a clipped
+     * edge tile is resized.
+     */
+    resizeBounds(width, height) {
+      this.width = Math.max(1, Math.floor(width));
+      this.height = Math.max(1, Math.floor(height));
+      this.transactionBefore = null;
+      for (const [key, tile] of [...this.tiles]) {
+        const x = tile.column * this.tileSize;
+        const y = tile.row * this.tileSize;
+        if (x >= this.width || y >= this.height) {
+          tile.canvas.remove();
+          tile.canvas.width = 1;
+          tile.canvas.height = 1;
+          this.tiles.delete(key);
+          continue;
+        }
+        this.reconcileTile(tile, {
+          key,
+          column: tile.column,
+          row: tile.row,
+          x,
+          y,
+          width: Math.min(this.tileSize, this.width - x),
+          height: Math.min(this.tileSize, this.height - y)
+        });
+      }
+      for (const [key, backing] of [...this.evicted]) {
+        const x = backing.descriptor.column * this.tileSize;
+        const y = backing.descriptor.row * this.tileSize;
+        if (x >= this.width || y >= this.height) this.evicted.delete(key);
+      }
     }
     beginPatch() {
       this.transactionBefore = /* @__PURE__ */ new Map();
@@ -4264,6 +4328,13 @@
         });
         if (oid) wanted.add(oid);
       });
+      const roomIdByWallId = /* @__PURE__ */ new Map();
+      (state2.wallRooms || []).forEach((room) => {
+        if (!(room == null ? void 0 : room.id)) return;
+        (room.wallIds || []).forEach((wallId) => {
+          if (wallId) roomIdByWallId.set(wallId, room.id);
+        });
+      });
       (state2.walls || []).forEach((wall, wallIndex) => {
         S.ensureWallId(wall);
         const pts = wall.pts || [];
@@ -4273,8 +4344,10 @@
           wall.name = "Wall " + wallNum;
         }
         let parentObjectId = null;
-        if (wall.roomId) {
-          const roomObj = S.findEngineObjectByLegacy ? S.findEngineObjectByLegacy((r) => r.kind === "wall-room" && r.id === wall.roomId) : null;
+        const canonicalRoomId = roomIdByWallId.get(wall.id) || null;
+        wall.roomId = canonicalRoomId;
+        if (canonicalRoomId) {
+          const roomObj = S.findEngineObjectByLegacy ? S.findEngineObjectByLegacy((r) => r.kind === "wall-room" && r.id === canonicalRoomId) : null;
           if (roomObj) parentObjectId = roomObj.id;
         }
         const oid = S.upsertEngineObject({
@@ -4461,6 +4534,8 @@
         const fam = S.brushLibraryEngine.familyOf(id);
         if (fam) return fam;
       }
+      const brush = S.BUILTIN_BRUSHES.find((item) => item.id === id);
+      if (brush == null ? void 0 : brush.family) return brush.family;
       for (const fam in S.BRUSH_FAMILIES) {
         if (S.BRUSH_FAMILIES[fam].includes(id)) return fam;
         for (const parentId of S.BRUSH_FAMILIES[fam]) {
@@ -4966,6 +5041,7 @@
       S.applyStageTransform();
     };
     S.resizeDocument = function resizeDocument(newWmm, newHmm, newDpi) {
+      var _a2, _b, _c, _d;
       const oldW = S.doc.wPx, oldH = S.doc.hPx;
       S.doc.wMM = newWmm;
       S.doc.hMM = newHmm;
@@ -4975,9 +5051,20 @@
       state2.infiniteCanvas = false;
       state2.autoExpandCanvas = false;
       state2.layers.forEach((layer) => {
+        var _a3, _b2, _c2, _d2, _e, _f;
+        (_b2 = (_a3 = layer.tileStore) == null ? void 0 : _a3.resizeBounds) == null ? void 0 : _b2.call(_a3, S.doc.wPx, S.doc.hPx);
+        (_d2 = (_c2 = layer.vectorTileStore) == null ? void 0 : _c2.resizeBounds) == null ? void 0 : _d2.call(_c2, S.doc.wPx, S.doc.hPx);
+        const sparseSurface = Boolean(
+          layer.tileStore || layer.vectorTileStore || layer.renderMode === "reference"
+        );
         ["canvas", "imageCanvas"].forEach((key) => {
           const src = layer[key];
           if (!src) return;
+          if (sparseSurface) {
+            src.width = 1;
+            src.height = 1;
+            return;
+          }
           const tmp = document.createElement("canvas");
           tmp.width = oldW;
           tmp.height = oldH;
@@ -4991,12 +5078,19 @@
         layer.history = [];
         layer.redo = [];
         layer._cur = null;
+        if (layer.pdf) {
+          layer.pdfRenderBox = null;
+          layer.pdfRenderedWidth = 0;
+          (_f = (_e = S).updatePdfCanvasStyle) == null ? void 0 : _f.call(_e, layer);
+        }
       });
-      S.strokeCanvas.width = S.doc.wPx;
-      S.strokeCanvas.height = S.doc.hPx;
+      S.strokeCanvas.width = 1;
+      S.strokeCanvas.height = 1;
       const gc = document.getElementById("guide-canvas");
-      gc.width = S.doc.wPx;
-      gc.height = S.doc.hPx;
+      if (gc) {
+        gc.width = 1;
+        gc.height = 1;
+      }
       const fmt = S.paperFormatName(newWmm, newHmm);
       document.querySelectorAll(".layer-props-title").forEach(() => {
       });
@@ -5007,6 +5101,8 @@
       if (typeof S.drawGuides === "function") S.drawGuides();
       state2.layers.forEach((l) => S.saveSnapshot(l));
       S.renderLayers();
+      (_b = (_a2 = S).schedulePdfRenders) == null ? void 0 : _b.call(_a2);
+      (_d = (_c = S).scheduleAutosave) == null ? void 0 : _d.call(_c);
     };
     S.expandDocumentPixels = function expandDocumentPixels(addLeft, addTop, addRight, addBottom) {
       if (!addLeft && !addTop && !addRight && !addBottom) return;
@@ -33954,6 +34050,11 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     const state2 = S.state;
     S.capHistory = capHistory;
     GlobalWorkerOptions.workerSrc = "/engine/pdf.worker.min.mjs";
+    S.isProtectedReferenceLayer = function isProtectedReferenceLayer(layer) {
+      if (!layer) return false;
+      const meta = layer.engineId && S.layerEngine ? S.layerEngine.getLayer(layer.engineId) : null;
+      return (meta == null ? void 0 : meta.layerKind) === "reference" || layer.renderMode === "reference";
+    };
     S.createLayer = function createLayer(name, opts) {
       var _a2;
       opts = opts || {};
@@ -33992,6 +34093,9 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
+          if (replaceLayer && S.isProtectedReferenceLayer(replaceLayer) && !options.allowReferenceReplace) {
+            replaceLayer = null;
+          }
           const targetLayer = replaceLayer || S.createLayer(String(name || "Image").slice(0, 32));
           if (targetLayer.pdf) {
             try {
@@ -34052,18 +34156,30 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         img.src = dataUrl;
       });
     };
+    S._pdfUploadCache = /* @__PURE__ */ new WeakMap();
     S.uploadPdfAsset = async function uploadPdfAsset(blob) {
       const pid = typeof window !== "undefined" ? window.__SKETCHTRUDE_PROJECT_ID : null;
       if (!pid || pid === "local" || !blob) return null;
-      const form = new FormData();
-      form.append("file", blob, blob.name || "source.pdf");
-      const response = await fetch(`/api/projects/${pid}/assets/pdf`, {
-        method: "POST",
-        body: form,
-        credentials: "same-origin"
-      });
-      if (!response.ok) throw new Error(await response.text());
-      return response.json();
+      const cached = S._pdfUploadCache.get(blob);
+      if (cached) return cached;
+      const upload = (async () => {
+        const form = new FormData();
+        form.append("file", blob, blob.name || "source.pdf");
+        const response = await fetch(`/api/projects/${pid}/assets/pdf`, {
+          method: "POST",
+          body: form,
+          credentials: "same-origin"
+        });
+        if (!response.ok) throw new Error(await response.text());
+        return response.json();
+      })();
+      S._pdfUploadCache.set(blob, upload);
+      try {
+        return await upload;
+      } catch (error) {
+        S._pdfUploadCache.delete(blob);
+        throw error;
+      }
     };
     S.uploadImageAsset = async function uploadImageAsset(blob) {
       const pid = typeof window !== "undefined" ? window.__SKETCHTRUDE_PROJECT_ID : null;
@@ -34351,7 +34467,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         layer.imageCtx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
         await S.renderPdfLayer(layer, true);
         S.updateLayerOrder();
-        S.uploadPdfAsset(file).then((asset) => {
+        S.uploadPdfAsset(pdfBlob).then((asset) => {
           if (!asset || !layer.pdf) return;
           layer.pdf.storagePath = asset.storagePath;
           layer.pdfUrl = asset.signedUrl;
@@ -34371,6 +34487,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       if (!replaceLayer && state2.replaceImageInLayer) {
         replaceLayer = state2.replaceImageInLayer;
         state2.replaceImageInLayer = null;
+      }
+      if (replaceLayer && S.isProtectedReferenceLayer(replaceLayer) && !options.allowReferenceReplace) {
+        replaceLayer = null;
+        S.showHint("The source Reference is protected \xB7 imported into a new editable layer");
       }
       if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
         return S.importPdfAsLayer(file, replaceLayer, options);
@@ -34416,7 +34536,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       });
     };
     S.importCanvasSource = async function importCanvasSource(file, options = {}) {
-      var _a2, _b, _c;
+      var _a2, _b, _c, _d;
       if (!file) throw new Error("Missing canvas source");
       const sourceId = String(options.sourceId || "");
       const existing = sourceId ? (state2.layers || []).find((layer) => layer.canvasSourceId === sourceId) : null;
@@ -34424,7 +34544,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       const activeSurface = S.activeLayer();
       const activeEngineId = (activeSurface == null ? void 0 : activeSurface.engineId) || ((_b = (_a2 = S.layerEngine) == null ? void 0 : _a2.getSketchLayerId) == null ? void 0 : _b.call(_a2));
       const baseName = String(file.name || "Reference").replace(/\.[^.]+$/, "").slice(0, 48);
-      const sourceName = `${options.kind === "pdf" ? "PDF" : "Image"} \xB7 ${baseName || "Reference"}`;
+      const sourceName = `${options.kind === "pdf" ? "PDF Reference" : "Image Reference"} \xB7 ${baseName || "Source"}`;
       const reference = S.createLayer(sourceName, {
         layerKind: "reference",
         locked: true,
@@ -34436,7 +34556,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           fitCanvas: true,
           pageNumber: options.pageNumber || 1,
           suppressHint: true,
-          throwOnError: true
+          throwOnError: true,
+          allowReferenceReplace: true
         });
         if (!imported) throw new Error("The canvas source could not be imported");
       } catch (error) {
@@ -34454,15 +34575,41 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           meta.locked = true;
         }
       }
-      if (activeEngineId && ((_c = S.layerEngine) == null ? void 0 : _c.getLayer(activeEngineId))) {
-        S.layerEngine.setActiveLayer(activeEngineId);
+      let editableCopy = null;
+      if (options.kind === "pdf" && reference.pdf && reference.pdfBlob) {
+        const copyName = `PDF \xB7 ${baseName || "Reference"} \xB7 Editable`;
+        editableCopy = S.createLayer(copyName, { layerKind: "sketch" });
+        editableCopy.canvasSourceId = sourceId ? `${sourceId}:editable` : null;
+        editableCopy.pdf = {
+          ...reference.pdf,
+          storagePath: reference.pdf.storagePath || null,
+          transform: { ...reference.imageTransform }
+        };
+        editableCopy.pdfBlob = reference.pdfBlob;
+        editableCopy.pdfUrl = reference.pdfUrl || null;
+        editableCopy.imageTransform = { ...reference.imageTransform };
+        editableCopy.imageOpacity = (_c = reference.imageOpacity) != null ? _c : 1;
+        editableCopy.imageBaked = false;
+        editableCopy.image = new Image();
+        editableCopy.image.src = "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+        await S.loadPdfRuntime(editableCopy, editableCopy.pdfBlob);
+        S.uploadPdfAsset(editableCopy.pdfBlob).then((asset) => {
+          if (!asset || !(editableCopy == null ? void 0 : editableCopy.pdf)) return;
+          editableCopy.pdf.storagePath = asset.storagePath;
+          editableCopy.pdfUrl = asset.signedUrl;
+          S.scheduleAutosave();
+        }).catch((error) => console.warn("Editable PDF upload deferred", error));
+      }
+      const nextActiveEngineId = (editableCopy == null ? void 0 : editableCopy.engineId) || activeEngineId;
+      if (nextActiveEngineId && ((_d = S.layerEngine) == null ? void 0 : _d.getLayer(nextActiveEngineId))) {
+        S.layerEngine.setActiveLayer(nextActiveEngineId);
         S.syncStateLayersFromEngine();
       }
       S.updateLayerOrder();
       S.renderLayers();
       S.updateUI();
       S.scheduleAutosave();
-      S.showHint("Canvas source added as a locked Reference layer");
+      S.showHint(editableCopy ? "PDF added as a locked Reference plus an editable transformable copy" : "Canvas source added as a locked Reference layer");
       return reference;
     };
     S.workingImage = function workingImage(layer) {
@@ -34800,8 +34947,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       if (typeof S.showOpeningPalette === "function") S.showOpeningPalette(state2.tool === "opening");
       if (typeof S.reconcileWallRooms === "function") S.reconcileWallRooms();
       if (typeof S.refreshMeasurements === "function") S.refreshMeasurements();
-      if (typeof S.syncWallsToMasses === "function") S.syncWallsToMasses();
       if (typeof S.syncSceneObjectsToEngine === "function") S.syncSceneObjectsToEngine();
+      if (typeof S.syncWallsToMasses === "function") S.syncWallsToMasses();
       if (typeof S.renderSchedule === "function") S.renderSchedule();
     };
     S._lastVecPush = 0;
@@ -35053,6 +35200,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           const meta = S.layerEngine.getLayer(row.id);
           const surf = S.surfaceByEngineId(row.id);
           const idx = surf ? state2.layers.indexOf(surf) : -1;
+          const referenceOnly = row.layerKind === "reference";
           const hasUnbakedImage = surf && surf.image && !surf.imageBaked;
           const pad = 10 + row.depth * 12;
           const kindLabel = row.layerKind === "object" ? "LAYER" : (row.layerKind || "layer").toUpperCase();
@@ -35072,15 +35220,15 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             <button class="layer-act ${row.visible ? "on" : "off"}" data-action="vis" data-id="${row.id}" title="Visibility">
               ${row.visible ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>' : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>'}
             </button>
-            <button class="layer-act ${row.locked ? "on" : "off"}" data-action="lock" data-id="${row.id}" title="Lock">
+            ${referenceOnly ? "" : `<button class="layer-act ${row.locked ? "on" : "off"}" data-action="lock" data-id="${row.id}" title="Lock">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-            </button>
-            ${surf ? `<button class="layer-act" data-action="menu" data-idx="${idx}" title="Layer options">
+            </button>`}
+            ${surf && !referenceOnly ? `<button class="layer-act" data-action="menu" data-idx="${idx}" title="Layer options">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
             </button>` : ""}
-            <button class="layer-act" data-action="del" data-id="${row.id}" ${row.layerKind === "sketch" && drawableIds.length <= 1 || row.layerKind === "object" ? 'style="opacity:.2;pointer-events:none"' : ""}>
+            ${referenceOnly ? "" : `<button class="layer-act" data-action="del" data-id="${row.id}" ${row.layerKind === "sketch" && drawableIds.length <= 1 || row.layerKind === "object" ? 'style="opacity:.2;pointer-events:none"' : ""}>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/></svg>
-            </button>
+            </button>`}
           </div>`;
           if (surf) {
             const thumb = div.querySelector("canvas");
@@ -35110,28 +35258,30 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             S.updateUI();
           });
           const nameEl = div.querySelector(".layer-name");
-          nameEl.addEventListener("dblclick", () => {
-            nameEl.contentEditable = "true";
-            nameEl.focus();
-            const range = document.createRange();
-            range.selectNodeContents(nameEl);
-            const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
-          });
-          nameEl.addEventListener("blur", () => {
-            const next = nameEl.textContent.trim() || "Layer";
-            S.layerEngine.renameLayer(row.id, next);
-            if (surf) surf.name = next;
-            nameEl.contentEditable = "false";
-            S.renderLayers();
-          });
-          nameEl.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              nameEl.blur();
-            }
-          });
+          if (!referenceOnly) {
+            nameEl.addEventListener("dblclick", () => {
+              nameEl.contentEditable = "true";
+              nameEl.focus();
+              const range = document.createRange();
+              range.selectNodeContents(nameEl);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+            });
+            nameEl.addEventListener("blur", () => {
+              const next = nameEl.textContent.trim() || "Layer";
+              S.layerEngine.renameLayer(row.id, next);
+              if (surf) surf.name = next;
+              nameEl.contentEditable = "false";
+              S.renderLayers();
+            });
+            nameEl.addEventListener("keydown", (e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                nameEl.blur();
+              }
+            });
+          }
           div.querySelectorAll(".layer-act").forEach((btn) => {
             btn.addEventListener("click", (e) => {
               e.stopPropagation();
@@ -35148,6 +35298,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
                 S.syncStateLayersFromEngine();
               } else if (action === "lock") {
                 const layer = S.layerEngine.getLayer(id);
+                if ((layer == null ? void 0 : layer.layerKind) === "reference") return;
                 S.layerEngine.setLayerLocked(id, !(layer && layer.locked));
                 S.syncStateLayersFromEngine();
               } else if (action === "menu") {
@@ -35434,6 +35585,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     };
     S.openLayerMenu = function openLayerMenu(idx, anchor) {
       S.closeLayerMenu();
+      if (S.isProtectedReferenceLayer(state2.layers[idx])) {
+        S.showHint("The source Reference can only be shown or hidden");
+        return;
+      }
       const items = [
         { label: "Move up", fn: () => S.moveLayer(idx, 1), disabled: idx === state2.layers.length - 1 },
         { label: "Move down", fn: () => S.moveLayer(idx, -1), disabled: idx === 0 },
@@ -39490,7 +39645,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       return out;
     };
-    $el("puck-name").addEventListener("click", (e) => {
+    $el("puck-name").addEventListener("pointerdown", (e) => {
+      e.preventDefault();
       e.stopPropagation();
       const group = S._groupOf ? S._groupOf(state2.tool) : null;
       const isDraw = group && group.id === "draw" || typeof S.isDrawTool === "function" && S.isDrawTool(state2.tool);
@@ -39750,14 +39906,31 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       setTimeout(() => document.addEventListener("pointerdown", S.closeBrushSubmenu, { once: true }), 0);
     };
     S.closeBrushPresetMenu = function closeBrushPresetMenu() {
-      var _a3;
+      var _a3, _b;
       (_a3 = document.getElementById("brush-preset-menu")) == null ? void 0 : _a3.remove();
+      (_b = $el("puck-name")) == null ? void 0 : _b.setAttribute("aria-expanded", "false");
+      if (S._brushPresetOutsideHandler) {
+        document.removeEventListener("pointerdown", S._brushPresetOutsideHandler, true);
+        S._brushPresetOutsideHandler = null;
+      }
       S.closeBrushSubmenu();
     };
     S.openBrushPresetMenu = function openBrushPresetMenu(anchor) {
       S.closeBrushPresetMenu();
       const family = S.brushFamilyOf(state2.tool);
-      const ids = S.BRUSH_FAMILIES[family] || [];
+      const quickIds = S.BRUSH_FAMILIES[family] || [];
+      const candidateIds = [.../* @__PURE__ */ new Set([
+        ...quickIds,
+        ...S.BUILTIN_BRUSHES.filter((brush) => brush.family === family || S.brushFamilyOf(brush.id) === family).map((brush) => brush.id)
+      ])];
+      const seenNames = /* @__PURE__ */ new Set();
+      const ids = candidateIds.filter((id) => {
+        const brush = S.BUILTIN_BRUSHES.find((item) => item.id === id);
+        const key = String((brush == null ? void 0 : brush.name) || id).trim().toLowerCase();
+        if (seenNames.has(key)) return false;
+        seenNames.add(key);
+        return true;
+      });
       if (!ids.length) return;
       const menu = document.createElement("div");
       menu.id = "brush-preset-menu";
@@ -39804,12 +39977,26 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         menu.appendChild(button);
       });
       menu.addEventListener("pointerdown", (event) => event.stopPropagation());
+      menu.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
       document.body.appendChild(menu);
+      anchor.setAttribute("aria-expanded", "true");
       const rect = anchor.getBoundingClientRect();
       const menuRect = menu.getBoundingClientRect();
       menu.style.left = Math.max(8, Math.min(window.innerWidth - menuRect.width - 8, rect.left)) + "px";
-      menu.style.top = Math.max(8, rect.top - menuRect.height - 10) + "px";
-      setTimeout(() => document.addEventListener("pointerdown", S.closeBrushPresetMenu, { once: true }), 0);
+      const above = rect.top - menuRect.height - 10;
+      const below = rect.bottom + 10;
+      menu.style.top = (above >= 8 ? above : Math.min(window.innerHeight - menuRect.height - 8, below)) + "px";
+      S._brushPresetOutsideHandler = (event) => {
+        var _a3;
+        const target = event.target;
+        if ((_a3 = target == null ? void 0 : target.closest) == null ? void 0 : _a3.call(target, "#brush-preset-menu,#brush-submenu,#puck-name")) return;
+        S.closeBrushPresetMenu();
+      };
+      setTimeout(() => {
+        if (S._brushPresetOutsideHandler) {
+          document.addEventListener("pointerdown", S._brushPresetOutsideHandler, true);
+        }
+      }, 0);
     };
     S.syncToolOptionsBar = function syncToolOptionsBar() {
       const ctx = $el("puck-context");
@@ -41767,6 +41954,75 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     };
   }
 
+  // src/engine/app/features/wall-massing-model.ts
+  function validAnchor(anchor) {
+    return Boolean(
+      anchor && Number.isFinite(anchor.px) && Number.isFinite(anchor.py) && Number.isFinite(anchor.ppm) && anchor.ppm > 0
+    );
+  }
+  function wallMassKey(wall, wallIndex, segmentIndex) {
+    const wallId = typeof wall.id === "string" && wall.id.trim() ? wall.id : `legacy-index-${wallIndex}`;
+    return `${wallId}:${segmentIndex}`;
+  }
+  function legacyWallMassKey(wallIndex, segmentIndex) {
+    return `${wallIndex}:${segmentIndex}`;
+  }
+  function wallMassBounds(walls) {
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const wall of walls) {
+      for (const point of wall.pts || []) {
+        if (!Number.isFinite(point == null ? void 0 : point.x) || !Number.isFinite(point == null ? void 0 : point.y)) continue;
+        minX = Math.min(minX, point.x);
+        minY = Math.min(minY, point.y);
+        maxX = Math.max(maxX, point.x);
+        maxY = Math.max(maxY, point.y);
+      }
+    }
+    if (![minX, minY, maxX, maxY].every(Number.isFinite)) return null;
+    return { minX, minY, maxX, maxY };
+  }
+  function resolveWallMassAnchor(options) {
+    const bounds = wallMassBounds(options.walls);
+    const ppm = Number.isFinite(options.currentPpm) && options.currentPpm > 0 ? options.currentPpm : null;
+    if (options.preserveExisting && validAnchor(options.existingAnchor)) {
+      return {
+        anchor: { ...options.existingAnchor },
+        bounds,
+        reanchored: false
+      };
+    }
+    if (!bounds || ppm == null) {
+      return {
+        anchor: validAnchor(options.existingAnchor) ? { ...options.existingAnchor } : null,
+        bounds,
+        reanchored: false
+      };
+    }
+    const anchor = {
+      px: (bounds.minX + bounds.maxX) / 2,
+      py: (bounds.minY + bounds.maxY) / 2,
+      ppm
+    };
+    const reanchored = !validAnchor(options.existingAnchor) || Math.abs(options.existingAnchor.px - anchor.px) > 0.01 || Math.abs(options.existingAnchor.py - anchor.py) > 0.01 || Math.abs(options.existingAnchor.ppm - anchor.ppm) > 1e-4;
+    return { anchor, bounds, reanchored };
+  }
+  function fitWallMassCameraScale(options) {
+    const { bounds, ppm, viewportWidth, viewportHeight } = options;
+    if (!bounds || !Number.isFinite(ppm) || ppm <= 0 || !Number.isFinite(viewportWidth) || !Number.isFinite(viewportHeight) || viewportWidth <= 0 || viewportHeight <= 0) {
+      return null;
+    }
+    const spanMetres = Math.max(
+      (bounds.maxX - bounds.minX) / ppm,
+      (bounds.maxY - bounds.minY) / ppm,
+      3
+    );
+    const fitted = Math.min(viewportWidth, viewportHeight) / (spanMetres * 1.65);
+    return Math.max(4, Math.min(60, fitted));
+  }
+
   // src/engine/app/features/rooms.ts
   function initRooms() {
     const state2 = S.state;
@@ -42589,8 +42845,23 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     };
     S.syncWallsToMasses = function syncWallsToMasses() {
       if (typeof S.massing === "undefined" || !S.massing.masses) return;
+      const hadGeneratedWallMasses = S.massing.masses.some((m) => m._fromWall);
+      const hasIndependentMasses = S.massing.masses.some(
+        (m) => !m._fromWall && !(m._wall && m._wallKey)
+      );
+      const anchorResolution = resolveWallMassAnchor({
+        walls: state2.walls || [],
+        currentPpm: S.pxPerMetre(),
+        existingAnchor: S.massing.baseAnchor,
+        preserveExisting: hasIndependentMasses
+      });
+      if (anchorResolution.anchor) S.massing.baseAnchor = anchorResolution.anchor;
       const anchor = S.massing.baseAnchor || { px: S.doc.wPx / 2, py: S.doc.hPx / 2, ppm: S.pxPerMetre() };
       const ax = anchor.px, ay = anchor.py, ppm = anchor.ppm || S.pxPerMetre();
+      S._wallMassBounds = anchorResolution.bounds;
+      S._wallMassNeedsFit = Boolean(
+        S._wallMassNeedsFit || anchorResolution.reanchored || !hadGeneratedWallMasses && (state2.walls || []).length > 0
+      );
       const saved = {};
       S.massing.masses.forEach((m) => {
         if (m._fromWall && m._wallKey) {
@@ -42625,7 +42896,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             h: w.heightM || 3,
             poly: S.wallSegPoly(a, b, tW),
             openings,
-            wallKey: wi + ":" + i
+            wallKey: wallMassKey(w, wi, i),
+            legacyWallKey: legacyWallMassKey(wi, i)
           });
         }
       });
@@ -42652,7 +42924,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
             return { kind: o.kind, u, w: o.wMM / 1e3, h: o.hMM / 1e3, sill: o.sillMM / 1e3 };
           });
         }
-        const sv = saved[p.wallKey];
+        const sv = saved[p.wallKey] || saved[p.legacyWallKey];
         if (sv) {
           if (sv.faceRegions) mass.faceRegions = sv.faceRegions;
           if (sv.faceArt) mass.faceArt = sv.faceArt;
@@ -43399,13 +43671,29 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         S.rulerOverlay.appendChild(tick);
       });
       [[m.x1, m.y1], [m.x2, m.y2]].forEach(([x, y]) => {
+        if (settingScale) {
+          const crosshairSize = calibrationMetrics.endpointRadius;
+          [
+            [x - crosshairSize, y - crosshairSize, x + crosshairSize, y + crosshairSize],
+            [x - crosshairSize, y + crosshairSize, x + crosshairSize, y - crosshairSize]
+          ].forEach(([x1, y1, x2, y2]) => {
+            const line = document.createElementNS(svgns, "line");
+            line.setAttribute("x1", String(x1));
+            line.setAttribute("y1", String(y1));
+            line.setAttribute("x2", String(x2));
+            line.setAttribute("y2", String(y2));
+            line.setAttribute("stroke", color);
+            line.setAttribute("stroke-width", String(calibrationMetrics.tickStrokeWidth));
+            line.setAttribute("stroke-linecap", "round");
+            line.setAttribute("pointer-events", "none");
+            S.rulerOverlay.appendChild(line);
+          });
+          return;
+        }
         const c = document.createElementNS(svgns, "circle");
         c.setAttribute("cx", String(x));
         c.setAttribute("cy", String(y));
-        c.setAttribute(
-          "r",
-          String(settingScale ? calibrationMetrics.endpointRadius : 7)
-        );
+        c.setAttribute("r", "7");
         c.setAttribute("fill", color);
         c.setAttribute("pointer-events", "none");
         S.rulerOverlay.appendChild(c);
@@ -43587,12 +43875,16 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     S.drawGuideGrid = function drawGuideGrid() {
       const gc = $el("guide-canvas");
       if (!gc) return;
+      if (state2.guideType === "none") {
+        gc.width = 1;
+        gc.height = 1;
+        return;
+      }
       gc.width = S.doc.wPx;
       gc.height = S.doc.hPx;
       const ctx = gc.getContext("2d");
       ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
       gc.style.opacity = state2.guideOpacity;
-      if (state2.guideType === "none") return;
       ctx.strokeStyle = "#1d4ed8";
       ctx.lineWidth = 1.5;
       if (state2.guideType === "iso") {
@@ -43809,6 +44101,21 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   var ORTHO_STEP_RAD = Math.PI / 4;
   var CARDINAL_STEPS = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
   var CARDINAL_CONE_RAD = 2.5 * Math.PI / 180;
+  function mergeDetectedWallCycles(detected, previousRooms, isValidPrevious) {
+    const merged = detected.map((cycle) => cycle.slice());
+    const signatures = new Set(
+      merged.map((cycle) => [...cycle].sort().join(","))
+    );
+    for (const room of previousRooms) {
+      const wallIds = (room.wallIds || []).filter(Boolean);
+      if (wallIds.length < 3) continue;
+      const signature = [...wallIds].sort().join(",");
+      if (signatures.has(signature) || !isValidPrevious(wallIds)) continue;
+      signatures.add(signature);
+      merged.push(wallIds.slice());
+    }
+    return merged;
+  }
   function initWallGraph() {
     const state2 = S.state;
     if (!state2.wallRooms) state2.wallRooms = [];
@@ -44212,8 +44519,15 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return tryOrient("a") || tryOrient("b") || poly;
     };
     S.reconcileWallRooms = function reconcileWallRooms(opts) {
-      const cycles = S.findWallCycles();
       const prev = state2.wallRooms || [];
+      const cycles = mergeDetectedWallCycles(
+        S.findWallCycles(),
+        prev,
+        (wallIds) => {
+          const poly = S.cyclePolygon(wallIds);
+          return Boolean(poly && poly.length >= 3 && S.shoelaceArea(poly) > 50);
+        }
+      );
       const usedWalls = /* @__PURE__ */ new Set();
       const nextRooms = [];
       cycles.forEach((loop, idx) => {
@@ -46879,6 +47193,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     S.enterMassing = function enterMassing() {
       S.showModeLoading(true);
       requestAnimationFrame(() => {
+        var _a2;
         try {
           S.dismissSketchOverlays();
           S.releaseTransientInput();
@@ -46890,7 +47205,19 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           S.massingCanvas.style.display = "block";
           S.massingBar.style.display = "flex";
           S.updateMassBaseBtn();
-          if (S.massing.cam.scale === 1) {
+          if (S._wallMassNeedsFit) {
+            const r = S.area.getBoundingClientRect();
+            const fittedScale = fitWallMassCameraScale({
+              bounds: S._wallMassBounds || null,
+              ppm: ((_a2 = S.massing.baseAnchor) == null ? void 0 : _a2.ppm) || S.pxPerMetre(),
+              viewportWidth: r.width,
+              viewportHeight: r.height
+            });
+            S.massing.panX = 0;
+            S.massing.panY = 0;
+            if (fittedScale) S.massing.cam.scale = fittedScale;
+            S._wallMassNeedsFit = false;
+          } else if (S.massing.cam.scale === 1) {
             const r = S.area.getBoundingClientRect();
             S.massing.cam.scale = Math.min(r.width, r.height) / 26;
           }
@@ -48219,6 +48546,20 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   function shouldPaintPersistedLayerRaster(hasPdf, pdfRestored, rasterMode) {
     return !hasPdf || !pdfRestored || rasterMode === "drawing-only";
   }
+  function mergeRuntimeLayerAssets(imported, local) {
+    if (!local) return imported;
+    const next = { ...imported };
+    if (!(imported.blob instanceof Blob && imported.blob.size > 0) && local.blob instanceof Blob && local.blob.size > 0) {
+      next.blob = local.blob;
+    }
+    if (imported.pdf && !(imported.pdfBlob instanceof Blob) && !(imported.pdf_url || imported.pdfUrl) && local.pdfBlob instanceof Blob) {
+      next.pdfBlob = local.pdfBlob;
+    }
+    if (imported.imageReference && !(imported.imageBlob instanceof Blob) && !(imported.image_url || imported.imageUrl) && local.imageBlob instanceof Blob) {
+      next.imageBlob = local.imageBlob;
+    }
+    return next;
+  }
   async function blobFingerprint(blob) {
     var _a2;
     const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -48781,14 +49122,12 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     S.mergeLocalLayerBlobs = async function mergeLocalLayerBlobs(saved) {
       var _a2, _b, _c, _d, _e, _f, _g;
       if (!((_a2 = saved == null ? void 0 : saved.layers) == null ? void 0 : _a2.length)) return saved;
-      const needsPixels = saved.layers.some((l) => !(l.blob && l.blob.size > 0) && !(l.raster_url || l.rasterUrl));
-      if (!needsPixels) return saved;
+      const needsLocalAssets = saved.layers.some((l) => !(l.blob && l.blob.size > 0) && !(l.raster_url || l.rasterUrl) || l.pdf && !(l.pdfBlob instanceof Blob) && !(l.pdf_url || l.pdfUrl) || l.imageReference && !(l.imageBlob instanceof Blob) && !(l.image_url || l.imageUrl));
+      if (!needsLocalAssets) return saved;
       try {
         const local = await S.loadSavedDoc();
         if (!((_b = local == null ? void 0 : local.layers) == null ? void 0 : _b.length)) return saved;
         const layers = saved.layers.map((layer, i) => {
-          if (layer.blob && layer.blob.size > 0) return layer;
-          if (layer.raster_url || layer.rasterUrl) return layer;
           const sameLayerType = (candidate) => Boolean(candidate == null ? void 0 : candidate.pdf) === Boolean(layer == null ? void 0 : layer.pdf);
           const layerId = typeof layer.layer_id === "string" ? layer.layer_id : null;
           const identifiedLocal = layerId ? local.layers.find((candidate) => (candidate == null ? void 0 : candidate.layer_id) === layerId) : null;
@@ -48797,10 +49136,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           const indexedLocal = local.layers[i];
           const localHasStableIds = local.layers.some((candidate) => candidate == null ? void 0 : candidate.layer_id);
           const fromLocal = identifiedLocal || (!layerId ? namedLocal || (!localHasStableIds && sameLayerType(indexedLocal) ? indexedLocal : null) : null);
-          if ((fromLocal == null ? void 0 : fromLocal.blob) && fromLocal.blob.size > 0) {
-            return { ...layer, blob: fromLocal.blob };
-          }
-          return layer;
+          return mergeRuntimeLayerAssets(layer, fromLocal);
         });
         const importedEmpty = !(((_c = saved.walls) == null ? void 0 : _c.length) || ((_d = saved.shapes) == null ? void 0 : _d.length) || ((_e = saved.masses) == null ? void 0 : _e.length) || ((_f = saved.measurements) == null ? void 0 : _f.length));
         const merged = { ...saved, layers };
@@ -48953,7 +49289,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const engineId = engineIds[i];
         const layer = engineId ? S.allocateLayerSurface(engineId, ld.name || `Layer ${i + 1}`) : S.createLayer(ld.name);
         layer.visible = ld.visible !== false;
-        layer.locked = ld.locked === true;
+        const protectedReference = ld.layerKind === "reference";
+        layer.locked = protectedReference || ld.locked === true;
         layer.opacity = typeof ld.opacity === "number" ? ld.opacity : 1;
         layer.canvasSourceId = ld.canvasSourceId || null;
         layer.trace = ld.trace || 0;
@@ -49002,8 +49339,9 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         if (S.layerEngine && engineId) {
           const meta = S.layerEngine.getLayer(engineId);
           if (meta) {
+            if (protectedReference) meta.layerKind = "reference";
             meta.visible = layer.visible;
-            meta.locked = layer.locked;
+            meta.locked = protectedReference || layer.locked;
             meta.opacity = layer.opacity;
             meta.trace = layer.trace;
             meta.blendMode = layer.blendMode;
@@ -49098,13 +49436,13 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         S.drawDocGrid();
       }
       if (Array.isArray(saved.measurements)) state2.measurements = saved.measurements;
+      state2.wallRooms = Array.isArray(saved.wallRooms) ? saved.wallRooms : [];
       if (Array.isArray(saved.walls)) {
         state2.walls = saved.walls;
         state2.walls.forEach(S.ensureWallId);
         if (typeof S.migrateWallsToSegments === "function") S.migrateWallsToSegments();
         if (typeof S.reconcileWallRooms === "function") S.reconcileWallRooms();
       }
-      if (Array.isArray(saved.wallRooms)) state2.wallRooms = saved.wallRooms;
       state2.wallsVisible = saved.wallsVisible != null ? !!saved.wallsVisible : true;
       if (Array.isArray(saved.shapes)) {
         state2.shapes = saved.shapes;
@@ -49115,8 +49453,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         S.massing.selected = -1;
       }
       if (saved.massBaseAnchor) S.massing.baseAnchor = saved.massBaseAnchor;
-      if (typeof S.syncWallsToMasses === "function") S.syncWallsToMasses();
       if (S.layerEngine) S.syncSceneObjectsToEngine();
+      if (typeof S.syncWallsToMasses === "function") S.syncWallsToMasses();
       S.fitToScreen();
       S.updateLayerOrder();
       S.renderLayers();

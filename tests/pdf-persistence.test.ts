@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   clearMatchingPdfPixels,
   findDuplicateLegacyPdfRasterIndexes,
+  mergeRuntimeLayerAssets,
   pdfRasterContentSimilarity,
   shouldPaintPersistedLayerRaster,
 } from "@/engine/app/persistence";
@@ -23,6 +24,18 @@ describe("PDF layer raster restoration", () => {
 
   it("always paints ordinary non-PDF layer rasters", () => {
     expect(shouldPaintPersistedLayerRaster(false, false)).toBe(true);
+  });
+
+  it("recovers a local PDF source blob when a local-first manifest has no URL", () => {
+    const pdfBlob = new Blob(["%PDF-1.7"], { type: "application/pdf" });
+    const imported = { pdf: { storagePath: "pdf/source.pdf" } };
+    const merged = mergeRuntimeLayerAssets(imported, {
+      pdf: imported.pdf,
+      pdfBlob,
+    });
+
+    expect(merged.pdfBlob).toBe(pdfBlob);
+    expect(imported).not.toHaveProperty("pdfBlob");
   });
 
   it("detects an exact legacy PDF raster copied onto a sketch layer", async () => {

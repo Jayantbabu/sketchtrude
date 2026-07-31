@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { tileKey, tilesForRect } from "@/engine/rendering/tile-store";
+import {
+  RasterTileStore,
+  tileKey,
+  tilesForRect,
+} from "@/engine/rendering/tile-store";
 import { VectorStrokeStore } from "@/engine/rendering/vector-stroke-store";
 
 describe("hybrid tile addressing", () => {
@@ -51,6 +55,25 @@ describe("hybrid tile addressing", () => {
 
   it("does not allocate coordinates outside the document", () => {
     expect(tilesForRect({ x: -100, y: -100, w: 50, h: 50 }, 1000, 1000)).toEqual([]);
+  });
+
+  it("updates sparse bounds without allocating a full-document canvas", () => {
+    let allocations = 0;
+    const store = new RasterTileStore({
+      width: 1000,
+      height: 800,
+      createCanvas: () => {
+        allocations += 1;
+        throw new Error("resize should not allocate a blank document bitmap");
+      },
+    });
+
+    store.resizeBounds(12000, 9000);
+
+    expect(store.width).toBe(12000);
+    expect(store.height).toBe(9000);
+    expect(store.size).toBe(0);
+    expect(allocations).toBe(0);
   });
 });
 

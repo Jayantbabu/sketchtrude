@@ -78,11 +78,25 @@ export function initViewport() {
     state.infiniteCanvas = false;
     state.autoExpandCanvas = false;
 
-    // Resize every layer's canvases, scaling existing content to the new size.
+    // Hybrid/reference layers intentionally use sparse tiles or a viewport-sized
+    // PDF renderer. Expanding their 1x1 compatibility canvases to the full sheet
+    // defeats that architecture and can allocate hundreds of MB per layer.
     state.layers.forEach((layer: any) => {
+      layer.tileStore?.resizeBounds?.(S.doc.wPx, S.doc.hPx);
+      layer.vectorTileStore?.resizeBounds?.(S.doc.wPx, S.doc.hPx);
+      const sparseSurface = Boolean(
+        layer.tileStore ||
+        layer.vectorTileStore ||
+        layer.renderMode === 'reference',
+      );
       ['canvas', 'imageCanvas'].forEach((key: any) => {
         const src = layer[key];
         if (!src) return;
+        if (sparseSurface) {
+          src.width = 1;
+          src.height = 1;
+          return;
+        }
         const tmp = document.createElement('canvas');
         tmp.width = oldW; tmp.height = oldH;
         (tmp.getContext('2d') as any).drawImage(src, 0, 0);
@@ -95,12 +109,17 @@ export function initViewport() {
       layer.history = [];
       layer.redo = [];
       layer._cur = null;
+      if (layer.pdf) {
+        layer.pdfRenderBox = null;
+        layer.pdfRenderedWidth = 0;
+        S.updatePdfCanvasStyle?.(layer);
+      }
     });
 
-    // Resize helper canvases
-    S.strokeCanvas.width = S.doc.wPx; S.strokeCanvas.height = S.doc.hPx;
+    // Live stroke previews allocate a capped display-resolution buffer on demand.
+    S.strokeCanvas.width = 1; S.strokeCanvas.height = 1;
     const gc = document.getElementById('guide-canvas') as any;
-    gc.width = S.doc.wPx; gc.height = S.doc.hPx;
+    if (gc) { gc.width = 1; gc.height = 1; }
 
     // Update document info panel
     const fmt = S.paperFormatName(newWmm, newHmm);
@@ -114,6 +133,8 @@ export function initViewport() {
     if (typeof S.drawGuides === 'function') S.drawGuides();
     state.layers.forEach((l: any) => S.saveSnapshot(l));
     S.renderLayers();
+    S.schedulePdfRenders?.();
+    S.scheduleAutosave?.();
   }
 
   /* Expand canvas for infinite-scroll drawing (Morpholio Trace style). */

@@ -181,7 +181,9 @@ export function NewProjectModal({ open, loading, onClose, onCreate }: Props) {
 
         <p className="papers-scale-note">
           {source
-            ? "The canvas and sketch layer will match this source exactly."
+            ? source.kind === "pdf"
+              ? "The canvas will match this PDF, with a locked source reference and a separate editable copy."
+              : "The canvas will match this source and keep it as a locked reference."
             : "Scale starts blank — set it with the ruler while sketching."}
         </p>
 

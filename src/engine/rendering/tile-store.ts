@@ -96,8 +96,8 @@ export function tilesForRect(
  * allocated only when a stroke touches their 512px document tile.
  */
 export class RasterTileStore {
-  readonly width: number;
-  readonly height: number;
+  width: number;
+  height: number;
   readonly tileSize: number;
   readonly maxResidentTiles: number;
   readonly root: HTMLElement | null;
@@ -220,9 +220,80 @@ export class RasterTileStore {
     const existing = this.tiles.get(coordinate.key);
     if (existing) {
       existing.lastUsed = ++this.clock;
+      this.reconcileTile(existing, coordinate);
       return existing;
     }
     return create ? this.createTile(coordinate) : null;
+  }
+
+  private reconcileTile(
+    tile: RuntimeTile,
+    coordinate: TileCoordinate,
+  ): void {
+    if (
+      tile.x === coordinate.x &&
+      tile.y === coordinate.y &&
+      tile.width === coordinate.width &&
+      tile.height === coordinate.height
+    ) {
+      return;
+    }
+
+    const previous = this.createCanvas(tile.width, tile.height);
+    previous.getContext("2d")?.drawImage(tile.canvas, 0, 0);
+    tile.canvas.width = coordinate.width;
+    tile.canvas.height = coordinate.height;
+    tile.canvas.style.left = `${coordinate.x}px`;
+    tile.canvas.style.top = `${coordinate.y}px`;
+    tile.canvas.style.width = `${coordinate.width}px`;
+    tile.canvas.style.height = `${coordinate.height}px`;
+    tile.context = tile.canvas.getContext("2d", {
+      willReadFrequently: true,
+    }) as CanvasRenderingContext2D;
+    tile.context.lineCap = "round";
+    tile.context.lineJoin = "round";
+    tile.context.drawImage(previous, 0, 0);
+    Object.assign(tile, coordinate);
+    tile.dirty = true;
+    tile.persistedBlob = null;
+  }
+
+  /**
+   * Change the sparse document bounds without allocating a document-sized
+   * bitmap. Existing tiles stay at their document coordinates; only a clipped
+   * edge tile is resized.
+   */
+  resizeBounds(width: number, height: number): void {
+    this.width = Math.max(1, Math.floor(width));
+    this.height = Math.max(1, Math.floor(height));
+    this.transactionBefore = null;
+
+    for (const [key, tile] of [...this.tiles]) {
+      const x = tile.column * this.tileSize;
+      const y = tile.row * this.tileSize;
+      if (x >= this.width || y >= this.height) {
+        tile.canvas.remove();
+        tile.canvas.width = 1;
+        tile.canvas.height = 1;
+        this.tiles.delete(key);
+        continue;
+      }
+      this.reconcileTile(tile, {
+        key,
+        column: tile.column,
+        row: tile.row,
+        x,
+        y,
+        width: Math.min(this.tileSize, this.width - x),
+        height: Math.min(this.tileSize, this.height - y),
+      });
+    }
+
+    for (const [key, backing] of [...this.evicted]) {
+      const x = backing.descriptor.column * this.tileSize;
+      const y = backing.descriptor.row * this.tileSize;
+      if (x >= this.width || y >= this.height) this.evicted.delete(key);
+    }
   }
 
   beginPatch(): void {

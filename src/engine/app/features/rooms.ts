@@ -1,5 +1,10 @@
 /* Feature: rooms — shared scope S */
 import { S } from "../scope";
+import {
+  legacyWallMassKey,
+  resolveWallMassAnchor,
+  wallMassKey,
+} from "./wall-massing-model";
 
 export function initRooms() {
   const state = S.state;
@@ -837,8 +842,25 @@ export function initRooms() {
 
   S.syncWallsToMasses = function syncWallsToMasses() {
     if (typeof S.massing === 'undefined' || !S.massing.masses) return;
+    const hadGeneratedWallMasses = S.massing.masses.some((m: any) => m._fromWall);
+    const hasIndependentMasses = S.massing.masses.some(
+      (m: any) => !m._fromWall && !(m._wall && m._wallKey),
+    );
+    const anchorResolution = resolveWallMassAnchor({
+      walls: state.walls || [],
+      currentPpm: S.pxPerMetre(),
+      existingAnchor: S.massing.baseAnchor,
+      preserveExisting: hasIndependentMasses,
+    });
+    if (anchorResolution.anchor) S.massing.baseAnchor = anchorResolution.anchor;
     const anchor = S.massing.baseAnchor || { px: S.doc.wPx / 2, py: S.doc.hPx / 2, ppm: S.pxPerMetre() };
     const ax = anchor.px, ay = anchor.py, ppm = anchor.ppm || S.pxPerMetre();
+    S._wallMassBounds = anchorResolution.bounds;
+    S._wallMassNeedsFit = Boolean(
+      S._wallMassNeedsFit ||
+      anchorResolution.reanchored ||
+      (!hadGeneratedWallMasses && (state.walls || []).length > 0),
+    );
     const saved: any = {};
     S.massing.masses.forEach((m: any) => {
       if (m._fromWall && m._wallKey) {
@@ -869,7 +891,8 @@ export function initRooms() {
           wi, seg: i, a, b, tW, h: (w.heightM || 3),
           poly: S.wallSegPoly(a, b, tW),
           openings,
-          wallKey: wi + ':' + i,
+          wallKey: wallMassKey(w, wi, i),
+          legacyWallKey: legacyWallMassKey(wi, i),
         });
       }
     });
@@ -899,7 +922,7 @@ export function initRooms() {
           return { kind: o.kind, u, w: o.wMM / 1000, h: o.hMM / 1000, sill: o.sillMM / 1000 };
         });
       }
-      const sv = saved[p.wallKey];
+      const sv = saved[p.wallKey] || saved[p.legacyWallKey];
       if (sv) {
         if (sv.faceRegions) mass.faceRegions = sv.faceRegions;
         if (sv.faceArt) mass.faceArt = sv.faceArt;

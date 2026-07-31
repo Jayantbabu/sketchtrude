@@ -22,11 +22,16 @@ export function initGuides() {
   S.drawGuideGrid = function drawGuideGrid() {
     const gc = $el('guide-canvas');
     if (!gc) return;
+    if (state.guideType === 'none') {
+      // A hidden document-sized backing store still consumes its full memory.
+      gc.width = 1;
+      gc.height = 1;
+      return;
+    }
     gc.width = S.doc.wPx; gc.height = S.doc.hPx;
     const ctx = gc.getContext('2d') as any;
     ctx.clearRect(0, 0, S.doc.wPx, S.doc.hPx);
     gc.style.opacity = state.guideOpacity;
-    if (state.guideType === 'none') return;
 
     ctx.strokeStyle = '#1d4ed8';
     ctx.lineWidth = 1.5;

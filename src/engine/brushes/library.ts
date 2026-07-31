@@ -124,6 +124,8 @@ export class BrushLibrary {
   }
 
   familyOf(id: string): string | null {
+    const brush = this.get(id);
+    if (brush?.family) return brush.family;
     for (const [fam, ids] of Object.entries(BRUSH_FAMILIES)) {
       if (ids.includes(id)) return fam;
       for (const parentId of ids) {
@@ -134,10 +136,7 @@ export class BrushLibrary {
   }
 
   familyMembers(family: string): BrushPreset[] {
-    const ids = BRUSH_FAMILIES[family] ?? [];
-    return ids
-      .map((id) => this.get(id))
-      .filter((b): b is BrushPreset => Boolean(b));
+    return this.all().filter((brush) => brush.family === family);
   }
 }
 

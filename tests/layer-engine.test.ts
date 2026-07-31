@@ -22,6 +22,16 @@ describe("Layer capabilities", () => {
     expect(arch.canHostObjects).toBe(true);
   });
 
+  it("keeps reference layers immutable except for visibility", () => {
+    const reference = getLayerCapabilities("reference");
+    expect(reference.canDraw).toBe(false);
+    expect(reference.lockByDefault).toBe(true);
+    expect(reference.supportsTransformWholeLayer).toBe(false);
+    expect(reference.supportsOpacity).toBe(false);
+    expect(reference.supportsBlendMode).toBe(false);
+    expect(reference.supportsMerge).toBe(false);
+  });
+
   it("gives walls length-constrained resize, not free scale", () => {
     const wall = getTransformCapabilities("wall");
     expect(wall.scalable).toBe(false);
@@ -109,6 +119,11 @@ describe("LayerEngine", () => {
     expect(engine.getLayerCapabilities(ids[0]!)?.canDraw).toBe(false);
     expect(engine.getActiveLayerId()).toBe(ids[1]);
     expect(engine.getSketchLayerId()).toBe(ids[1]);
+
+    engine.setLayerLocked(ids[0]!, false);
+    engine.setLayerOpacity(ids[0]!, 0.25);
+    expect(engine.getLayer(ids[0]!)?.locked).toBe(true);
+    expect(engine.getLayer(ids[0]!)?.opacity).toBe(1);
   });
 
   it("projects Layer 1 elements without a floor row by default", () => {

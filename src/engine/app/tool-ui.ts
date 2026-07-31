@@ -980,7 +980,8 @@ export function initToolUi() {
   }
 
   // The active brush name is the compact preset picker for draw tools.
-  $el('puck-name').addEventListener('click', (e: any) => {
+  $el('puck-name').addEventListener('pointerdown', (e: any) => {
+    e.preventDefault();
     e.stopPropagation();
     const group = S._groupOf ? S._groupOf(state.tool) : null;
     const isDraw = (group && group.id === 'draw') || (typeof S.isDrawTool === 'function' && S.isDrawTool(state.tool));
@@ -1220,13 +1221,33 @@ export function initToolUi() {
 
   S.closeBrushPresetMenu = function closeBrushPresetMenu() {
     document.getElementById('brush-preset-menu')?.remove();
+    $el('puck-name')?.setAttribute('aria-expanded', 'false');
+    if (S._brushPresetOutsideHandler) {
+      document.removeEventListener('pointerdown', S._brushPresetOutsideHandler, true);
+      S._brushPresetOutsideHandler = null;
+    }
     S.closeBrushSubmenu();
   };
 
   S.openBrushPresetMenu = function openBrushPresetMenu(anchor: HTMLElement) {
     S.closeBrushPresetMenu();
     const family = S.brushFamilyOf(state.tool);
-    const ids = S.BRUSH_FAMILIES[family] || [];
+    const quickIds = S.BRUSH_FAMILIES[family] || [];
+    const candidateIds = [...new Set([
+      ...quickIds,
+      ...S.BUILTIN_BRUSHES
+        .filter((brush: any) =>
+          brush.family === family || S.brushFamilyOf(brush.id) === family)
+        .map((brush: any) => brush.id),
+    ])];
+    const seenNames = new Set<string>();
+    const ids = candidateIds.filter((id: string) => {
+      const brush = S.BUILTIN_BRUSHES.find((item: any) => item.id === id);
+      const key = String(brush?.name || id).trim().toLowerCase();
+      if (seenNames.has(key)) return false;
+      seenNames.add(key);
+      return true;
+    });
     if (!ids.length) return;
 
     const menu = document.createElement('div');
@@ -1281,12 +1302,27 @@ export function initToolUi() {
     });
 
     menu.addEventListener('pointerdown', (event) => event.stopPropagation());
+    menu.addEventListener('wheel', (event) => event.stopPropagation(), { passive: true });
     document.body.appendChild(menu);
+    anchor.setAttribute('aria-expanded', 'true');
     const rect = anchor.getBoundingClientRect();
     const menuRect = menu.getBoundingClientRect();
     menu.style.left = Math.max(8, Math.min(window.innerWidth - menuRect.width - 8, rect.left)) + 'px';
-    menu.style.top = Math.max(8, rect.top - menuRect.height - 10) + 'px';
-    setTimeout(() => document.addEventListener('pointerdown', S.closeBrushPresetMenu, { once: true }), 0);
+    const above = rect.top - menuRect.height - 10;
+    const below = rect.bottom + 10;
+    menu.style.top = (above >= 8
+      ? above
+      : Math.min(window.innerHeight - menuRect.height - 8, below)) + 'px';
+    S._brushPresetOutsideHandler = (event: PointerEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest?.('#brush-preset-menu,#brush-submenu,#puck-name')) return;
+      S.closeBrushPresetMenu();
+    };
+    setTimeout(() => {
+      if (S._brushPresetOutsideHandler) {
+        document.addEventListener('pointerdown', S._brushPresetOutsideHandler, true);
+      }
+    }, 0);
   };
 
   /** Bottom-center context options for shapes / wall / measure / region / selection. */

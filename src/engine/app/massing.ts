@@ -1,6 +1,7 @@
 /* Auto-converted from public/engine/app/09-massing.js — shared scope S */
 import { S } from "./scope";
 import { initWalls } from "./walls";
+import { fitWallMassCameraScale } from "./features/wall-massing-model";
 
 export function initMassing() {
   const state = S.state;
@@ -1727,7 +1728,19 @@ export function initMassing() {
         S.massingCanvas.style.display = 'block';
         S.massingBar.style.display = 'flex';
         S.updateMassBaseBtn();
-        if (S.massing.cam.scale === 1) {
+        if (S._wallMassNeedsFit) {
+          const r = S.area.getBoundingClientRect();
+          const fittedScale = fitWallMassCameraScale({
+            bounds: S._wallMassBounds || null,
+            ppm: S.massing.baseAnchor?.ppm || S.pxPerMetre(),
+            viewportWidth: r.width,
+            viewportHeight: r.height,
+          });
+          S.massing.panX = 0;
+          S.massing.panY = 0;
+          if (fittedScale) S.massing.cam.scale = fittedScale;
+          S._wallMassNeedsFit = false;
+        } else if (S.massing.cam.scale === 1) {
           // first run: sensible default zoom relative to viewport
           const r = S.area.getBoundingClientRect();
           S.massing.cam.scale = Math.min(r.width, r.height) / 26;

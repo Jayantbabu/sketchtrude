@@ -10,6 +10,26 @@ const ORTHO_STEP_RAD = Math.PI / 4;
 const CARDINAL_STEPS = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
 const CARDINAL_CONE_RAD = (2.5 * Math.PI) / 180;
 
+export function mergeDetectedWallCycles(
+  detected: string[][],
+  previousRooms: Array<{ wallIds?: string[] | null }>,
+  isValidPrevious: (wallIds: string[]) => boolean,
+): string[][] {
+  const merged = detected.map((cycle) => cycle.slice());
+  const signatures = new Set(
+    merged.map((cycle) => [...cycle].sort().join(",")),
+  );
+  for (const room of previousRooms) {
+    const wallIds = (room.wallIds || []).filter(Boolean);
+    if (wallIds.length < 3) continue;
+    const signature = [...wallIds].sort().join(",");
+    if (signatures.has(signature) || !isValidPrevious(wallIds)) continue;
+    signatures.add(signature);
+    merged.push(wallIds.slice());
+  }
+  return merged;
+}
+
 export function initWallGraph() {
   const state = S.state;
   if (!state.wallRooms) state.wallRooms = [];
@@ -519,8 +539,15 @@ export function initWallGraph() {
   };
 
   S.reconcileWallRooms = function reconcileWallRooms(opts?: { skipLayerSync?: boolean }) {
-    const cycles = S.findWallCycles();
     const prev = state.wallRooms || [];
+    const cycles = mergeDetectedWallCycles(
+      S.findWallCycles(),
+      prev,
+      (wallIds) => {
+        const poly = S.cyclePolygon(wallIds);
+        return Boolean(poly && poly.length >= 3 && S.shoelaceArea(poly) > 50);
+      },
+    );
     const usedWalls = new Set<string>();
     const nextRooms: any[] = [];
 

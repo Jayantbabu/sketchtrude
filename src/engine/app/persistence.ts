@@ -10,6 +10,53 @@ export function shouldPaintPersistedLayerRaster(
   return !hasPdf || !pdfRestored || rasterMode === 'drawing-only';
 }
 
+type RuntimeAssetLayer = {
+  blob?: Blob | null;
+  raster_url?: string | null;
+  rasterUrl?: string | null;
+  pdf?: unknown;
+  pdfBlob?: Blob | null;
+  pdf_url?: string | null;
+  pdfUrl?: string | null;
+  imageReference?: unknown;
+  imageBlob?: Blob | null;
+  image_url?: string | null;
+  imageUrl?: string | null;
+  [key: string]: unknown;
+};
+
+export function mergeRuntimeLayerAssets<T extends RuntimeAssetLayer>(
+  imported: T,
+  local: RuntimeAssetLayer | null | undefined,
+): T & RuntimeAssetLayer {
+  if (!local) return imported;
+  const next: RuntimeAssetLayer = { ...imported };
+  if (
+    !(imported.blob instanceof Blob && imported.blob.size > 0) &&
+    local.blob instanceof Blob &&
+    local.blob.size > 0
+  ) {
+    next.blob = local.blob;
+  }
+  if (
+    imported.pdf &&
+    !(imported.pdfBlob instanceof Blob) &&
+    !(imported.pdf_url || imported.pdfUrl) &&
+    local.pdfBlob instanceof Blob
+  ) {
+    next.pdfBlob = local.pdfBlob;
+  }
+  if (
+    imported.imageReference &&
+    !(imported.imageBlob instanceof Blob) &&
+    !(imported.image_url || imported.imageUrl) &&
+    local.imageBlob instanceof Blob
+  ) {
+    next.imageBlob = local.imageBlob;
+  }
+  return next as T & RuntimeAssetLayer;
+}
+
 async function blobFingerprint(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   if (globalThis.crypto?.subtle) {
@@ -629,14 +676,17 @@ export function initPersistence() {
   /** If imported layers lack pixels, merge blobs from the engine's local IDB autosave. */
   S.mergeLocalLayerBlobs = async function mergeLocalLayerBlobs(saved: any) {
     if (!saved?.layers?.length) return saved;
-    const needsPixels = saved.layers.some((l: any) => !(l.blob && l.blob.size > 0) && !(l.raster_url || l.rasterUrl));
-    if (!needsPixels) return saved;
+    const needsLocalAssets = saved.layers.some((l: any) =>
+      (!(l.blob && l.blob.size > 0) && !(l.raster_url || l.rasterUrl)) ||
+      (l.pdf && !(l.pdfBlob instanceof Blob) && !(l.pdf_url || l.pdfUrl)) ||
+      (l.imageReference &&
+        !(l.imageBlob instanceof Blob) &&
+        !(l.image_url || l.imageUrl)));
+    if (!needsLocalAssets) return saved;
     try {
       const local = await S.loadSavedDoc();
       if (!local?.layers?.length) return saved;
       const layers = saved.layers.map((layer: any, i: any) => {
-        if (layer.blob && layer.blob.size > 0) return layer;
-        if (layer.raster_url || layer.rasterUrl) return layer;
         const sameLayerType = (candidate: any) => Boolean(candidate?.pdf) === Boolean(layer?.pdf);
         const layerId = typeof layer.layer_id === 'string' ? layer.layer_id : null;
         const identifiedLocal = layerId
@@ -650,10 +700,7 @@ export function initPersistence() {
         const fromLocal = identifiedLocal || (!layerId
           ? namedLocal || (!localHasStableIds && sameLayerType(indexedLocal) ? indexedLocal : null)
           : null);
-        if (fromLocal?.blob && fromLocal.blob.size > 0) {
-          return { ...layer, blob: fromLocal.blob };
-        }
-        return layer;
+        return mergeRuntimeLayerAssets(layer, fromLocal);
       });
       // Prefer local vector data when the imported doc looks empty (broken prior cloud save)
       const importedEmpty =
@@ -807,7 +854,8 @@ export function initPersistence() {
         ? S.allocateLayerSurface(engineId, ld.name || `Layer ${i + 1}`)
         : S.createLayer(ld.name);
       layer.visible = ld.visible !== false;
-      layer.locked = ld.locked === true;
+      const protectedReference = ld.layerKind === 'reference';
+      layer.locked = protectedReference || ld.locked === true;
       layer.opacity = typeof ld.opacity === 'number' ? ld.opacity : 1;
       layer.canvasSourceId = ld.canvasSourceId || null;
       layer.trace = ld.trace || 0;
@@ -859,8 +907,9 @@ export function initPersistence() {
       if (S.layerEngine && engineId) {
         const meta = S.layerEngine.getLayer(engineId);
         if (meta) {
+          if (protectedReference) meta.layerKind = 'reference';
           meta.visible = layer.visible;
-          meta.locked = layer.locked;
+          meta.locked = protectedReference || layer.locked;
           meta.opacity = layer.opacity;
           meta.trace = layer.trace;
           meta.blendMode = layer.blendMode;
@@ -959,13 +1008,15 @@ export function initPersistence() {
       S.drawDocGrid();
     }
     if (Array.isArray(saved.measurements)) state.measurements = saved.measurements;
+    // Restore the room graph before reconciling walls so stable room IDs and
+    // membership are available to cycle repair and LayerEngine hierarchy.
+    state.wallRooms = Array.isArray(saved.wallRooms) ? saved.wallRooms : [];
     if (Array.isArray(saved.walls)) {
       state.walls = saved.walls;
       state.walls.forEach(S.ensureWallId);
       if (typeof S.migrateWallsToSegments === 'function') S.migrateWallsToSegments();
       if (typeof S.reconcileWallRooms === 'function') S.reconcileWallRooms();
     }
-    if (Array.isArray(saved.wallRooms)) state.wallRooms = saved.wallRooms;
     state.wallsVisible = saved.wallsVisible != null ? !!saved.wallsVisible : true;
     if (Array.isArray(saved.shapes)) {
       state.shapes = saved.shapes;
@@ -973,8 +1024,9 @@ export function initPersistence() {
     }
     if (Array.isArray(saved.masses)) { S.massing.masses = saved.masses; S.massing.selected = -1; }
     if (saved.massBaseAnchor) S.massing.baseAnchor = saved.massBaseAnchor;
-    if (typeof S.syncWallsToMasses === 'function') S.syncWallsToMasses();
     if (S.layerEngine) S.syncSceneObjectsToEngine();
+    // Effective wall visibility depends on the repaired LayerEngine hierarchy.
+    if (typeof S.syncWallsToMasses === 'function') S.syncWallsToMasses();
     S.fitToScreen();
     S.updateLayerOrder(); S.renderLayers(); S.updateUI();
     S.refreshMeasurements(); S.renderSchedule();
