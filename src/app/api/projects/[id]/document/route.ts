@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
   attachLayerRasterUrls,
+  buildStoredStudioDocument,
   layerRasterPath,
   type StudioDocument,
 } from "@/lib/projects/document";
@@ -123,33 +124,6 @@ function studioToSavedLayers(
   }
 
   return savedLayers;
-}
-
-function buildStudioDocument(
-  manifest: StudioDocument & { layer_count?: number },
-  savedLayers: StudioDocument["layers"],
-): StudioDocument {
-  return {
-    version: manifest.version ?? 1,
-    savedAt: manifest.savedAt ?? Date.now(),
-    doc: manifest.doc,
-    infiniteCanvas: manifest.infiniteCanvas,
-    autoExpandCanvas: false,
-    paperBg: manifest.paperBg,
-    grid: manifest.grid,
-    activeLayer: manifest.activeLayer,
-    scaleCalibration: manifest.scaleCalibration,
-    pxPerUnit: manifest.pxPerUnit,
-    scaleUnit: manifest.scaleUnit,
-    scaleLabel: manifest.scaleLabel ?? null,
-    measurements: manifest.measurements,
-    walls: manifest.walls,
-    wallsVisible: manifest.wallsVisible,
-    shapes: manifest.shapes,
-    masses: manifest.masses,
-    massBaseAnchor: manifest.massBaseAnchor,
-    layers: savedLayers,
-  };
 }
 
 async function parsePutBody(request: Request): Promise<{
@@ -442,7 +416,7 @@ export async function PUT(request: Request, context: RouteContext) {
         existingStudioDocument,
         uploadedPaths,
       );
-      studio_document = buildStudioDocument(
+      studio_document = buildStoredStudioDocument(
         { ...legacy, version: legacy.version ?? 1, savedAt: Date.now() },
         savedLayers,
       );
@@ -462,7 +436,7 @@ export async function PUT(request: Request, context: RouteContext) {
         existingStudioDocument,
         uploadedPaths,
       );
-      studio_document = buildStudioDocument(parsed.legacyManifest, savedLayers);
+      studio_document = buildStoredStudioDocument(parsed.legacyManifest, savedLayers);
       project_document = projectDocumentFromLegacyStudio(projectId, studio_document, {
         name: project.title,
         createdAt: project.created_at,

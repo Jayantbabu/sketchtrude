@@ -11,6 +11,29 @@ import { UnsupportedSchemaVersionError } from "@/features/projects/domain/projec
 import { CURRENT_PROJECT_SCHEMA_VERSION } from "@/features/projects/domain/project-document-schema";
 import { DirtyStateTracker } from "@/persistence/autosave/dirty-state-tracker";
 import { chooseLoadSource } from "@/persistence/recovery/recovery-policy";
+import { buildStoredStudioDocument } from "@/lib/projects/document";
+
+describe("stored studio document", () => {
+  it("preserves wall-room cycles", () => {
+    const room = {
+      id: "room-1",
+      name: "Room 1",
+      wallIds: ["north", "east", "south", "west"],
+    };
+    const stored = buildStoredStudioDocument(
+      {
+        version: 1,
+        savedAt: 1,
+        doc: { wmm: 420, hmm: 297, dpi: 150 },
+        walls: [],
+        wallRooms: [room],
+        layers: [],
+      },
+      [],
+    );
+    expect(stored.wallRooms).toEqual([room]);
+  });
+});
 
 describe("createEmptyProjectDocument", () => {
   it("creates a schemaVersion 1 document with legacyStudio extension", () => {

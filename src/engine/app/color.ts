@@ -1,6 +1,98 @@
 /* Colour wheel — shared scope S */
 import { S } from "./scope";
 
+export const STROKE_TEXTURE_CHOICES = [
+  { brushId: null, label: 'Solid', mode: 'solid' },
+  { brushId: 'tex-grass', label: 'Grass', mode: 'grass' },
+  { brushId: 'tex-concrete', label: 'Concrete', mode: 'concrete' },
+  { brushId: 'tex-wood', label: 'Wood', mode: 'wood' },
+  { brushId: 'tex-brick', label: 'Brick', mode: 'brick' },
+  { brushId: 'tex-stone', label: 'Stone', mode: 'stone' },
+] as const;
+
+const STROKE_TEXTURE_TOOL_IDS = new Set<string>(
+  STROKE_TEXTURE_CHOICES.flatMap((choice) => choice.brushId ? [choice.brushId] : []),
+);
+
+function drawStrokeTexturePreview(canvas: HTMLCanvasElement, mode: string, color: string) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = '#f4f2ee';
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  if (mode === 'solid') {
+    ctx.fillRect(0, 0, w, h);
+    return;
+  }
+  if (mode === 'grass') {
+    ctx.lineWidth = 1.6;
+    for (let x = 4; x < w; x += 7) {
+      const y = h - 5 - ((x * 3) % 6);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x - 3, y - 12);
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + 3, y - 15);
+      ctx.stroke();
+    }
+    return;
+  }
+  if (mode === 'concrete') {
+    ctx.globalAlpha = 0.72;
+    for (let i = 0; i < 32; i++) {
+      const x = (i * 23) % w;
+      const y = (i * 17) % h;
+      ctx.beginPath();
+      ctx.arc(x, y, 0.7 + (i % 3) * 0.45, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 0.4;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(3, 10); ctx.lineTo(20, 15); ctx.lineTo(34, 9); ctx.lineTo(51, 14); ctx.stroke();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  if (mode === 'wood') {
+    ctx.lineWidth = 1.4;
+    for (let y = 6; y < h; y += 7) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      for (let x = 0; x <= w; x += 8) ctx.lineTo(x, y + Math.sin((x + y) / 8) * 2);
+      ctx.stroke();
+    }
+    ctx.beginPath(); ctx.ellipse(w * 0.7, h * 0.48, 8, 4, 0, 0, Math.PI * 2); ctx.stroke();
+    return;
+  }
+  if (mode === 'brick') {
+    ctx.lineWidth = 1.4;
+    for (let y = 0, row = 0; y <= h; y += 10, row++) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      const offset = row % 2 ? 10 : 0;
+      for (let x = offset; x < w; x += 20) {
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, Math.min(h, y + 10)); ctx.stroke();
+      }
+    }
+    return;
+  }
+  if (mode === 'stone') {
+    ctx.lineWidth = 1.4;
+    const stones = [[4,5,19,10],[25,3,17,12],[46,6,21,9],[2,19,15,11],[20,18,23,12],[48,18,17,11]];
+    stones.forEach(([x, y, sw, sh]) => {
+      ctx.beginPath();
+      ctx.roundRect(x, y, sw, sh, 4);
+      ctx.stroke();
+    });
+  }
+}
+
 export function initColor() {
   const state = S.state;
 
@@ -256,6 +348,49 @@ export function initColor() {
     });
   }
 
+  S.renderStrokeTextures = function renderStrokeTextures() {
+    const cont = $el('stroke-textures');
+    if (!cont) return;
+    cont.innerHTML = '';
+    const activeTexture = STROKE_TEXTURE_TOOL_IDS.has(state.tool) ? state.tool : null;
+    STROKE_TEXTURE_CHOICES.forEach((choice) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'stroke-texture-option' + (activeTexture === choice.brushId ? ' active' : '');
+      button.dataset.brushId = choice.brushId || 'solid';
+      button.setAttribute('aria-pressed', String(activeTexture === choice.brushId));
+      button.title = choice.brushId
+        ? `${choice.label} texture stroke`
+        : 'Use the previous solid brush';
+
+      const preview = document.createElement('canvas');
+      preview.width = 76;
+      preview.height = 34;
+      preview.setAttribute('aria-hidden', 'true');
+      drawStrokeTexturePreview(preview, choice.mode, state.color);
+      const label = document.createElement('span');
+      label.textContent = choice.label;
+      button.append(preview, label);
+
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (choice.brushId) {
+          if (!STROKE_TEXTURE_TOOL_IDS.has(state.tool)) state.strokeTexturePreviousTool = state.tool;
+          S.setTool(choice.brushId);
+          S.showHint(`${choice.label} texture — draw to paint a repeating material stroke`);
+        } else {
+          const previous = state.strokeTexturePreviousTool;
+          const solidTool = previous && !STROKE_TEXTURE_TOOL_IDS.has(previous) ? previous : 'pen';
+          S.setTool(solidTool);
+          S.showHint('Solid stroke restored');
+        }
+        S.colorPopover.classList.add('show');
+        S.renderStrokeTextures();
+      });
+      cont.appendChild(button);
+    });
+  };
+
   S.setColor = function setColor(c: any) {
     state.color = c;
     $el('puck-color').style.background = c;
@@ -264,6 +399,7 @@ export function initColor() {
     S.syncWheelFromColor(c);
     S.updatePreview();
     S.renderSwatches();
+    S.renderStrokeTextures();
   };
 
   $el('puck-color').addEventListener('click', (e: any) => {
@@ -279,6 +415,7 @@ export function initColor() {
     S.drawSVSquare();
     S.updateHarmony();
     S.renderSwatches();
+    S.renderStrokeTextures();
     $el('fill-tolerance-row').style.display = (state.tool === 'fill' || state.tool === 'wand' || state.tool === 'lasso') ? 'block' : 'none';
 
     // Measure after show, then clamp inside the canvas area (prefer above when puck is low).

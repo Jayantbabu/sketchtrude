@@ -4,7 +4,13 @@ import {
   resolveWallMassAnchor,
   wallMassKey,
 } from "@/engine/app/features/wall-massing-model";
-import { mergeDetectedWallCycles } from "@/engine/app/features/wall-graph";
+import {
+  dedupeOverlappingWallCycles,
+  matchingPreviousRoomIndex,
+  mergeDetectedWallCycles,
+  recoverSavedWallRooms,
+} from "@/engine/app/features/wall-graph";
+import { BUILTIN_FILL_TEXTURES } from "@/engine/app/fill";
 
 const roomWalls = [
   { id: "north", pts: [{ x: 100, y: 100 }, { x: 500, y: 100 }] },
@@ -64,6 +70,24 @@ describe("2D wall to 3D mass synchronization", () => {
 });
 
 describe("persisted room graph reconciliation", () => {
+  it("recovers room membership from saved walls when an older server omitted wallRooms", () => {
+    expect(
+      recoverSavedWallRooms(undefined, [
+        { id: "north", roomId: "room-1" },
+        { id: "east", roomId: "room-1" },
+        { id: "south", roomId: "room-1" },
+        { id: "west", roomId: "room-1" },
+      ]),
+    ).toEqual([
+      {
+        id: "room-1",
+        name: "Room 1",
+        wallIds: ["north", "east", "south", "west"],
+        areaPx2: 0,
+      },
+    ]);
+  });
+
   it("keeps a valid saved room when detection temporarily misses it", () => {
     const savedRoom = { wallIds: ["north", "east", "south", "west"] };
     expect(mergeDetectedWallCycles([], [savedRoom], () => true)).toEqual([
@@ -79,5 +103,107 @@ describe("persisted room graph reconciliation", () => {
         () => false,
       ),
     ).toEqual([]);
+  });
+
+  it("does not append a stale saved room when detection already found one", () => {
+    const detected = [["north", "east-v2", "south", "west"]];
+    expect(
+      mergeDetectedWallCycles(
+        detected,
+        [{ wallIds: ["north", "east", "south", "west"] }],
+        () => true,
+      ),
+    ).toEqual(detected);
+  });
+
+  it("restores a valid saved boundary wall omitted by transient detection", () => {
+    expect(
+      mergeDetectedWallCycles(
+        [["north", "south", "west"]],
+        [{ wallIds: ["north", "east", "south", "west"] }],
+        (wallIds) => wallIds.includes("east"),
+      ),
+    ).toEqual([["north", "east", "south", "west"]]);
+  });
+
+  it("does not revive an omitted saved wall when that boundary is invalid", () => {
+    const detected = [["north", "south", "west"]];
+    expect(
+      mergeDetectedWallCycles(
+        detected,
+        [{ wallIds: ["north", "missing-east", "south", "west"] }],
+        () => false,
+      ),
+    ).toEqual(detected);
+  });
+
+  it("keeps room identity when one normalized wall id changes", () => {
+    expect(
+      matchingPreviousRoomIndex(
+        ["north", "east-v2", "south", "west"],
+        [
+          { wallIds: ["other-a", "other-b", "other-c"] },
+          { wallIds: ["north", "east", "south", "west"] },
+        ],
+      ),
+    ).toBe(1);
+  });
+
+  it("collapses stale room records that differ by one wall id", () => {
+    expect(
+      dedupeOverlappingWallCycles([
+        ["north", "east", "south", "west"],
+        ["north", "east-v2", "south", "west"],
+        ["north", "east-v3", "south", "west"],
+      ]),
+    ).toEqual([["north", "east", "south", "west"]]);
+  });
+
+  it("keeps adjacent rooms that only share their dividing wall", () => {
+    const rooms = [
+      ["north-a", "outer-east", "south-a", "divider"],
+      ["north-b", "divider", "south-b", "outer-west"],
+    ];
+    expect(dedupeOverlappingWallCycles(rooms)).toEqual(rooms);
+  });
+
+  it("restores only one room when saved fallbacks overlap", () => {
+    expect(
+      mergeDetectedWallCycles(
+        [],
+        [
+          { wallIds: ["north", "east", "south", "west"] },
+          { wallIds: ["north", "east-v2", "south", "west"] },
+          { wallIds: ["north", "east-v3", "south", "west"] },
+        ],
+        () => true,
+      ),
+    ).toEqual([["north", "east", "south", "west"]]);
+  });
+
+  it("prefers the fuller valid room when a shorter fallback was saved first", () => {
+    expect(
+      mergeDetectedWallCycles(
+        [],
+        [
+          { wallIds: ["north", "south", "west"] },
+          { wallIds: ["north", "east", "south", "west"] },
+        ],
+        () => true,
+      ),
+    ).toEqual([["north", "east", "south", "west"]]);
+  });
+});
+
+describe("fill texture presets", () => {
+  it("ships useful architectural textures without requiring an import", () => {
+    expect(BUILTIN_FILL_TEXTURES.map((texture) => texture.name)).toEqual([
+      "Diagonal hatch",
+      "Cross hatch",
+      "Brick",
+      "Concrete",
+      "Timber",
+    ]);
+    expect(BUILTIN_FILL_TEXTURES.every((texture) => texture.dataUrl.startsWith("data:image/svg+xml"))).toBe(true);
   });
 });

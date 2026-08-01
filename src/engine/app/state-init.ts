@@ -3,6 +3,63 @@ import { S } from "./scope";
 import { RasterTileStore, tilesForRect } from "../rendering/tile-store";
 import { VectorStrokeStore } from "../rendering/vector-stroke-store";
 
+export function enforceWallRoomContainment(
+  layerEngine: any,
+  wallRooms: Array<{ id?: string; wallIds?: string[] }>,
+) {
+  if (!layerEngine) return;
+  const objects = layerEngine.objects || {};
+  const layers = layerEngine.layers || {};
+  const roomObjectByLegacyId = new Map<string, any>();
+  const managedRoomObjectIds = new Set<string>();
+
+  Object.values(objects).forEach((object: any) => {
+    const ref = object?.legacyRef;
+    if (ref?.kind !== 'wall-room' || !ref.id) return;
+    roomObjectByLegacyId.set(ref.id, object);
+    managedRoomObjectIds.add(object.id);
+  });
+
+  const roomLegacyIdByWallId = new Map<string, string>();
+  (wallRooms || []).forEach((room) => {
+    if (!room?.id) return;
+    (room.wallIds || []).forEach((wallId) => {
+      if (wallId) roomLegacyIdByWallId.set(wallId, room.id!);
+    });
+  });
+
+  const managedWalls: any[] = [];
+  Object.values(objects).forEach((object: any) => {
+    if (object?.legacyRef?.kind === 'wall' && object.legacyRef.id) managedWalls.push(object);
+  });
+  const managedWallObjectIds = new Set(managedWalls.map((object) => object.id));
+
+  // A wall must live in exactly one place: its room child list or the layer root.
+  Object.values(layers).forEach((layer: any) => {
+    layer.objectIds = (layer.objectIds || []).filter((id: string) => !managedWallObjectIds.has(id));
+  });
+  Object.values(objects).forEach((object: any) => {
+    object.childIds = (object.childIds || []).filter((id: string) => !managedWallObjectIds.has(id));
+  });
+
+  managedWalls.forEach((wallObject) => {
+    const legacyRoomId = roomLegacyIdByWallId.get(wallObject.legacyRef.id);
+    const roomObject = legacyRoomId ? roomObjectByLegacyId.get(legacyRoomId) : null;
+    const parentObjectId = roomObject?.id || null;
+    wallObject.relations.hierarchyParentId = parentObjectId;
+    wallObject.relations.groupIds = (wallObject.relations.groupIds || [])
+      .filter((id: string) => !managedRoomObjectIds.has(id));
+
+    if (roomObject) {
+      if (!roomObject.childIds.includes(wallObject.id)) roomObject.childIds.push(wallObject.id);
+      wallObject.relations.groupIds.push(roomObject.id);
+    } else {
+      const layer = layers[wallObject.layerId];
+      if (layer && !layer.objectIds.includes(wallObject.id)) layer.objectIds.push(wallObject.id);
+    }
+  });
+}
+
 export function initState() {
   const state = S.state;
 
@@ -207,6 +264,7 @@ export function initState() {
     if (stale.length) {
       try { S.layerEngine.deleteObjects(stale); } catch (_) { /* ignore */ }
     }
+    enforceWallRoomContainment(S.layerEngine, state.wallRooms || []);
     if (typeof S.layerEngine.normalizeObjectContainment === 'function') {
       S.layerEngine.normalizeObjectContainment();
     }
@@ -218,7 +276,7 @@ export function initState() {
     if (!mainId) return;
     S.ensureShapeId(shape);
     S.upsertEngineObject({
-      type: 'shape',
+      type: shape.kind === 'stencil' ? 'stencil' : 'shape',
       name: shape.name || 'Shape',
       layerId: mainId,
       legacyRef: { kind: 'shape', id: shape.id },
@@ -257,14 +315,19 @@ export function initState() {
       });
     });
 
+    const wallNamesSeen = new Set<string>();
     (state.walls || []).forEach((wall: any, wallIndex: any) => {
       S.ensureWallId(wall);
       const pts = wall.pts || [];
       if (pts.length < 2) return;
       const wallNum = wallIndex + 1;
-      if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+      const currentWallName = String(wall.name || '').trim();
+      const isGeneratedWallName = /^Wall(?:\s+\d+)?$/i.test(currentWallName);
+      if (!currentWallName || /^Room\s+\d+$/i.test(currentWallName) || /^Face\s+\d+$/i.test(currentWallName) ||
+          (isGeneratedWallName && wallNamesSeen.has(currentWallName.toLowerCase()))) {
         wall.name = 'Wall ' + wallNum;
       }
+      wallNamesSeen.add(String(wall.name).toLowerCase());
       let parentObjectId: string | null = null;
       const canonicalRoomId = roomIdByWallId.get(wall.id) || null;
       wall.roomId = canonicalRoomId;
@@ -292,12 +355,13 @@ export function initState() {
         const label =
           kind === 'rect' ? 'Rectangle' :
           kind === 'ellipse' ? 'Ellipse' :
-          kind === 'polygon' ? 'Polygon' : 'Shape';
+          kind === 'polygon' ? 'Polygon' :
+          kind === 'stencil' ? 'Stencil' : 'Shape';
         const n = (state.shapes || []).filter((s: any) => s !== sh && (s.kind || 'shape') === kind).length + 1;
         sh.name = label + ' ' + n;
       }
       const oid = S.upsertEngineObject({
-        type: 'shape',
+        type: sh.kind === 'stencil' ? 'stencil' : 'shape',
         name: sh.name,
         layerId: mainId,
         legacyRef: { kind: 'shape', id: sh.id },
@@ -318,9 +382,16 @@ export function initState() {
         if (!kids.length) toDel.push(id);
         return;
       }
+      // Semantic room rows are rebuilt from state.wallRooms above. Delete old
+      // room objects even when an earlier version saved one without legacyRef.
+      if (o.type === 'room') {
+        toDel.push(id);
+        return;
+      }
       if (o.legacyRef) toDel.push(id);
     });
     if (toDel.length) S.layerEngine.deleteObjects(toDel);
+    enforceWallRoomContainment(S.layerEngine, state.wallRooms || []);
     if (typeof S.layerEngine.normalizeObjectContainment === 'function') {
       S.layerEngine.normalizeObjectContainment();
     }

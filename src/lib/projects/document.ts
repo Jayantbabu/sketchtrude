@@ -70,12 +70,42 @@ export type StudioDocument = {
   scaleLabel?: string | null;
   measurements?: unknown[];
   walls?: unknown[];
+  wallRooms?: unknown[];
   wallsVisible?: boolean;
   shapes?: unknown[];
   masses?: unknown[];
   massBaseAnchor?: unknown;
   layers: StudioLayerMeta[];
 };
+
+/** Build the JSON-safe studio payload stored in project metadata. */
+export function buildStoredStudioDocument(
+  manifest: StudioDocument & { layer_count?: number },
+  savedLayers: StudioDocument["layers"],
+): StudioDocument {
+  return {
+    version: manifest.version ?? 1,
+    savedAt: manifest.savedAt ?? Date.now(),
+    doc: manifest.doc,
+    infiniteCanvas: manifest.infiniteCanvas,
+    autoExpandCanvas: false,
+    paperBg: manifest.paperBg,
+    grid: manifest.grid,
+    activeLayer: manifest.activeLayer,
+    scaleCalibration: manifest.scaleCalibration,
+    pxPerUnit: manifest.pxPerUnit,
+    scaleUnit: manifest.scaleUnit,
+    scaleLabel: manifest.scaleLabel ?? null,
+    measurements: manifest.measurements,
+    walls: manifest.walls,
+    wallRooms: manifest.wallRooms,
+    wallsVisible: manifest.wallsVisible,
+    shapes: manifest.shapes,
+    masses: manifest.masses,
+    massBaseAnchor: manifest.massBaseAnchor,
+    layers: savedLayers,
+  };
+}
 
 export function layerRasterPath(
   userId: string,

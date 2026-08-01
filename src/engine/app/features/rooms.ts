@@ -751,7 +751,24 @@ export function initRooms() {
       const shapeOpacity = typeof sh.opacity === 'number' ? sh.opacity
         : (engObj && typeof engObj.opacity === 'number' ? engObj.opacity : 1);
       const clipId = 'shclip_' + si;
-      if (sh.bgImage) {
+      if (sh.kind === 'stencil' && sh.bgImage && sh.pts && sh.pts.length >= 4) {
+        // Map the unit image square onto the stencil's transformed rectangle.
+        // Because the four corners are the source of truth, the existing
+        // vector Move / Scale / Rotate tools work without a second transform.
+        const p0 = sh.pts[0], p1 = sh.pts[1], p3 = sh.pts[3];
+        const img = document.createElementNS(svgns, 'image');
+        img.setAttribute('href', sh.bgImage);
+        img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', sh.bgImage);
+        img.setAttribute('x', '0'); img.setAttribute('y', '0');
+        img.setAttribute('width', '1'); img.setAttribute('height', '1');
+        img.setAttribute('preserveAspectRatio', 'none');
+        img.setAttribute(
+          'transform',
+          `matrix(${p1.x - p0.x} ${p1.y - p0.y} ${p3.x - p0.x} ${p3.y - p0.y} ${p0.x} ${p0.y})`,
+        );
+        img.setAttribute('opacity', String(shapeOpacity));
+        S.rulerOverlay.appendChild(img);
+      } else if (sh.bgImage) {
         // Background image clipped to shape bounds
         const defs = document.createElementNS(svgns, 'defs');
         const clip = document.createElementNS(svgns, 'clipPath');
@@ -1188,14 +1205,17 @@ export function initRooms() {
         const sh = state.shapes[i];
         const id = S.ensureShapeId(sh);
         // Capability-gated selection (Phase 2B) — do not fork on type for selectability.
-        if (S.__ix && S.__ix.capabilityRegistry && !S.__ix.capabilityRegistry.get('shape').selectable) {
+        const sceneType = sh.kind === 'stencil' ? 'stencil' : 'shape';
+        if (S.__ix && S.__ix.capabilityRegistry && !S.__ix.capabilityRegistry.get(sceneType).selectable) {
           break;
         }
         state.sel = { type: 'shape', idx: i, id }; state.selOpening2D = null;
         S.showOpeningPalette(false); S.showSelectBar('shape');
         S.syncSelectionManagerFromLegacy('canvas');
         S.refreshMeasurements();
-        S.showHint('Shape selected — edit width or delete'); return true;
+        S.showHint(sh.kind === 'stencil'
+          ? 'Stencil selected — use Move, Scale, Rotate, or Delete'
+          : 'Shape selected — edit width or delete'); return true;
       }
     }
     const mh = S.measurementHit(p);

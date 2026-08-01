@@ -7,6 +7,7 @@ import {
   resolveStrokeParams,
   smoothPoint,
 } from "@/engine/brushes";
+import { STROKE_TEXTURE_CHOICES } from "@/engine/app/color";
 
 describe("Brush library", () => {
   it("ships the recommended Phase 1+ built-in set", () => {
@@ -59,6 +60,25 @@ describe("Brush library", () => {
       "tex-trees",
       "tex-ground-cover",
     ]);
+  });
+
+  it("maps the colour palette material choices to working texture brushes", () => {
+    expect(STROKE_TEXTURE_CHOICES.map((choice) => choice.label)).toEqual([
+      "Solid",
+      "Grass",
+      "Concrete",
+      "Wood",
+      "Brick",
+      "Stone",
+    ]);
+
+    for (const choice of STROKE_TEXTURE_CHOICES) {
+      if (!choice.brushId) continue;
+      const brush = BUILTIN_BRUSH_PRESETS.find((item) => item.id === choice.brushId);
+      expect(brush, choice.label).toBeTruthy();
+      expect(brush?.tipType, choice.label).toBe("texture");
+      expect(brush?.engineType, choice.label).toBe("texture");
+    }
   });
 });
 

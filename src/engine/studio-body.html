@@ -311,6 +311,14 @@
         <div class="color-harmony-row" id="harmony-row"></div>
         <!-- Quick swatches -->
         <div class="color-swatches-row" id="swatches"></div>
+        <!-- Brush material textures -->
+        <div class="stroke-texture-section">
+          <div class="stroke-texture-heading">
+            <span>Stroke texture</span>
+            <small>uses current colour</small>
+          </div>
+          <div class="stroke-texture-row" id="stroke-textures"></div>
+        </div>
         <!-- Tolerance row (shown only when fill tool active) -->
         <div id="fill-tolerance-row" style="display:none;">
           <div class="hsv-row" style="margin-top:6px;padding-top:8px;border-top:1px solid var(--line);">
@@ -333,13 +341,13 @@
             <label style="width:60px;font-size:9px;">FILL WITH</label>
             <div style="display:flex;gap:6px;">
               <button type="button" class="seg-btn active" data-fillstyle="color">Colour</button>
-              <button type="button" class="seg-btn" data-fillstyle="image">Image</button>
+              <button type="button" class="seg-btn" data-fillstyle="image">Texture</button>
             </div>
           </div>
           <div id="fill-image-opts" style="display:none;">
             <div id="fill-tex-strip" class="tex-strip"></div>
             <div class="hsv-row" style="margin-top:6px;">
-              <button type="button" id="fill-tex-import" class="seg-btn" style="width:100%;">+ Import texture</button>
+              <button type="button" id="fill-tex-import" class="seg-btn" style="width:100%;">+ Import custom texture</button>
             </div>
             <div class="hsv-row" style="margin-top:6px;">
               <label style="width:60px;font-size:9px;">MODE</label>

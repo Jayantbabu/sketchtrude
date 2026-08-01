@@ -1,6 +1,7 @@
 /* Auto-converted from public/engine/app/11-persistence.js — shared scope S */
 import { S } from "./scope";
 import { initHostBridge } from "./host-bridge";
+import { recoverSavedWallRooms } from "./features/wall-graph";
 
 export function shouldPaintPersistedLayerRaster(
   hasPdf: boolean,
@@ -1010,7 +1011,10 @@ export function initPersistence() {
     if (Array.isArray(saved.measurements)) state.measurements = saved.measurements;
     // Restore the room graph before reconciling walls so stable room IDs and
     // membership are available to cycle repair and LayerEngine hierarchy.
-    state.wallRooms = Array.isArray(saved.wallRooms) ? saved.wallRooms : [];
+    state.wallRooms = recoverSavedWallRooms(
+      saved.wallRooms,
+      Array.isArray(saved.walls) ? saved.walls : [],
+    );
     if (Array.isArray(saved.walls)) {
       state.walls = saved.walls;
       state.walls.forEach(S.ensureWallId);

@@ -149,6 +149,7 @@ describe("stable shape IDs", () => {
     expect(obj.id).toBe(shape.id);
     expect(obj.transform.position).toEqual({ x: 10, y: 20, z: 0 });
     expect(sceneTypeFromShapeKind("line")).toBe("line");
+    expect(sceneTypeFromShapeKind("stencil")).toBe("stencil");
   });
 
   it("createSceneObjectId returns unique-ish values", () => {

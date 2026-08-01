@@ -176,6 +176,7 @@ export type LayerNode = {
 export type LegacyObjectRef =
   | { kind: "shape"; id: string }
   | { kind: "wall"; id: string }
+  | { kind: "wall-room"; id: string }
   | { kind: "wall-face"; wallId: string; seg: number };
 
 export type SceneObjectType =

@@ -304,6 +304,7 @@ export type LegacyStudioDocument = {
   scaleLabel?: string | null;
   measurements?: unknown[];
   walls?: unknown[];
+  wallRooms?: unknown[];
   wallsVisible?: boolean;
   shapes?: unknown[];
   masses?: unknown[];

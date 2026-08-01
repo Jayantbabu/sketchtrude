@@ -979,8 +979,14 @@ export function initToolUi() {
     return out;
   }
 
-  // The active brush name is the compact preset picker for draw tools.
-  $el('puck-name').addEventListener('pointerdown', (e: any) => {
+  // The active brush name is the compact preset picker for draw tools. Keep
+  // pointerdown exclusively for isolating the button from puck dragging, and
+  // toggle on click so mouse, pen, touch, and keyboard activation agree.
+  const puckNameButton = $el('puck-name');
+  puckNameButton.addEventListener('pointerdown', (e: any) => {
+    e.stopPropagation();
+  });
+  const toggleBrushPresetMenu = (e: any) => {
     e.preventDefault();
     e.stopPropagation();
     const group = S._groupOf ? S._groupOf(state.tool) : null;
@@ -991,7 +997,11 @@ export function initToolUi() {
       return;
     }
     if (S._grpFlyout) S.closeGroupFlyout();
-    S.openBrushPresetMenu($el('puck-name'));
+    S.openBrushPresetMenu(puckNameButton);
+  };
+  puckNameButton.addEventListener('click', toggleBrushPresetMenu);
+  puckNameButton.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowUp') toggleBrushPresetMenu(e);
   });
 
   /* =================== BRUSH EDITOR =================== */
@@ -1233,16 +1243,12 @@ export function initToolUi() {
     S.closeBrushPresetMenu();
     const family = S.brushFamilyOf(state.tool);
     const quickIds = S.BRUSH_FAMILIES[family] || [];
-    const candidateIds = [...new Set([
-      ...quickIds,
-      ...S.BUILTIN_BRUSHES
-        .filter((brush: any) =>
-          brush.family === family || S.brushFamilyOf(brush.id) === family)
-        .map((brush: any) => brush.id),
-    ])];
     const seenNames = new Set<string>();
-    const ids = candidateIds.filter((id: string) => {
+    // The puck is the five-choice quick picker. The full brush library and
+    // nested texture catalog remain available from the side Draw menu.
+    const ids = quickIds.slice(0, 5).filter((id: string) => {
       const brush = S.BUILTIN_BRUSHES.find((item: any) => item.id === id);
+      if (!brush) return false;
       const key = String(brush?.name || id).trim().toLowerCase();
       if (seenNames.has(key)) return false;
       seenNames.add(key);

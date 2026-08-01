@@ -619,6 +619,7 @@
   // src/engine/interaction/legacy-shape-adapter.ts
   function sceneTypeFromShapeKind(kind) {
     if (kind === "line") return "line";
+    if (kind === "stencil") return "stencil";
     return "shape";
   }
   function ensureShapeId(shape) {
@@ -4112,6 +4113,52 @@
   };
 
   // src/engine/app/state-init.ts
+  function enforceWallRoomContainment(layerEngine, wallRooms) {
+    if (!layerEngine) return;
+    const objects = layerEngine.objects || {};
+    const layers = layerEngine.layers || {};
+    const roomObjectByLegacyId = /* @__PURE__ */ new Map();
+    const managedRoomObjectIds = /* @__PURE__ */ new Set();
+    Object.values(objects).forEach((object) => {
+      const ref = object == null ? void 0 : object.legacyRef;
+      if ((ref == null ? void 0 : ref.kind) !== "wall-room" || !ref.id) return;
+      roomObjectByLegacyId.set(ref.id, object);
+      managedRoomObjectIds.add(object.id);
+    });
+    const roomLegacyIdByWallId = /* @__PURE__ */ new Map();
+    (wallRooms || []).forEach((room) => {
+      if (!(room == null ? void 0 : room.id)) return;
+      (room.wallIds || []).forEach((wallId) => {
+        if (wallId) roomLegacyIdByWallId.set(wallId, room.id);
+      });
+    });
+    const managedWalls = [];
+    Object.values(objects).forEach((object) => {
+      var _a2;
+      if (((_a2 = object == null ? void 0 : object.legacyRef) == null ? void 0 : _a2.kind) === "wall" && object.legacyRef.id) managedWalls.push(object);
+    });
+    const managedWallObjectIds = new Set(managedWalls.map((object) => object.id));
+    Object.values(layers).forEach((layer) => {
+      layer.objectIds = (layer.objectIds || []).filter((id) => !managedWallObjectIds.has(id));
+    });
+    Object.values(objects).forEach((object) => {
+      object.childIds = (object.childIds || []).filter((id) => !managedWallObjectIds.has(id));
+    });
+    managedWalls.forEach((wallObject) => {
+      const legacyRoomId = roomLegacyIdByWallId.get(wallObject.legacyRef.id);
+      const roomObject = legacyRoomId ? roomObjectByLegacyId.get(legacyRoomId) : null;
+      const parentObjectId = (roomObject == null ? void 0 : roomObject.id) || null;
+      wallObject.relations.hierarchyParentId = parentObjectId;
+      wallObject.relations.groupIds = (wallObject.relations.groupIds || []).filter((id) => !managedRoomObjectIds.has(id));
+      if (roomObject) {
+        if (!roomObject.childIds.includes(wallObject.id)) roomObject.childIds.push(wallObject.id);
+        wallObject.relations.groupIds.push(roomObject.id);
+      } else {
+        const layer = layers[wallObject.layerId];
+        if (layer && !layer.objectIds.includes(wallObject.id)) layer.objectIds.push(wallObject.id);
+      }
+    });
+  }
   function initState() {
     const state2 = S.state;
     S.LOGO_B64 = "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";
@@ -4290,6 +4337,7 @@
         } catch (_) {
         }
       }
+      enforceWallRoomContainment(S.layerEngine, state2.wallRooms || []);
       if (typeof S.layerEngine.normalizeObjectContainment === "function") {
         S.layerEngine.normalizeObjectContainment();
       }
@@ -4301,7 +4349,7 @@
       if (!mainId) return;
       S.ensureShapeId(shape);
       S.upsertEngineObject({
-        type: "shape",
+        type: shape.kind === "stencil" ? "stencil" : "shape",
         name: shape.name || "Shape",
         layerId: mainId,
         legacyRef: { kind: "shape", id: shape.id },
@@ -4335,14 +4383,18 @@
           if (wallId) roomIdByWallId.set(wallId, room.id);
         });
       });
+      const wallNamesSeen = /* @__PURE__ */ new Set();
       (state2.walls || []).forEach((wall, wallIndex) => {
         S.ensureWallId(wall);
         const pts = wall.pts || [];
         if (pts.length < 2) return;
         const wallNum = wallIndex + 1;
-        if (!wall.name || /^Room\s+\d+$/i.test(wall.name) || /^Face\s+\d+$/i.test(wall.name)) {
+        const currentWallName = String(wall.name || "").trim();
+        const isGeneratedWallName = /^Wall(?:\s+\d+)?$/i.test(currentWallName);
+        if (!currentWallName || /^Room\s+\d+$/i.test(currentWallName) || /^Face\s+\d+$/i.test(currentWallName) || isGeneratedWallName && wallNamesSeen.has(currentWallName.toLowerCase())) {
           wall.name = "Wall " + wallNum;
         }
+        wallNamesSeen.add(String(wall.name).toLowerCase());
         let parentObjectId = null;
         const canonicalRoomId = roomIdByWallId.get(wall.id) || null;
         wall.roomId = canonicalRoomId;
@@ -4364,12 +4416,12 @@
         S.ensureShapeId(sh);
         if (!sh.name) {
           const kind = sh.kind || "shape";
-          const label = kind === "rect" ? "Rectangle" : kind === "ellipse" ? "Ellipse" : kind === "polygon" ? "Polygon" : "Shape";
+          const label = kind === "rect" ? "Rectangle" : kind === "ellipse" ? "Ellipse" : kind === "polygon" ? "Polygon" : kind === "stencil" ? "Stencil" : "Shape";
           const n = (state2.shapes || []).filter((s) => s !== sh && (s.kind || "shape") === kind).length + 1;
           sh.name = label + " " + n;
         }
         const oid = S.upsertEngineObject({
-          type: "shape",
+          type: sh.kind === "stencil" ? "stencil" : "shape",
           name: sh.name,
           layerId: mainId,
           legacyRef: { kind: "shape", id: sh.id },
@@ -4388,9 +4440,14 @@
           if (!kids.length) toDel.push(id);
           return;
         }
+        if (o.type === "room") {
+          toDel.push(id);
+          return;
+        }
         if (o.legacyRef) toDel.push(id);
       });
       if (toDel.length) S.layerEngine.deleteObjects(toDel);
+      enforceWallRoomContainment(S.layerEngine, state2.wallRooms || []);
       if (typeof S.layerEngine.normalizeObjectContainment === "function") {
         S.layerEngine.normalizeObjectContainment();
       }
@@ -37778,6 +37835,32 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   }
 
   // src/engine/app/stencils.ts
+  function createPlacedStencilShape(options) {
+    const rad = (options.rotationDeg || 0) * Math.PI / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    const corners = [
+      { x: -options.width / 2, y: -options.height / 2 },
+      { x: options.width / 2, y: -options.height / 2 },
+      { x: options.width / 2, y: options.height / 2 },
+      { x: -options.width / 2, y: options.height / 2 }
+    ];
+    return {
+      kind: "stencil",
+      name: options.name,
+      pts: corners.map((corner) => ({
+        x: options.x + corner.x * cos - corner.y * sin,
+        y: options.y + corner.x * sin + corner.y * cos
+      })),
+      closed: true,
+      stroke: "transparent",
+      width: 1,
+      opacity: typeof options.opacity === "number" ? options.opacity : 1,
+      bgImage: options.dataUrl,
+      stencilDataUrl: options.dataUrl,
+      visible: true
+    };
+  }
   function initStencils() {
     const state2 = S.state;
     const $el = (id) => document.getElementById(id);
@@ -37787,60 +37870,95 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       if (state2.selectedStencil === null) return;
       const rad = (state2.stencilRotation || 0) * Math.PI / 180;
       const l = S.activeLayer();
-      const ctx = l.ctx;
+      if (!l || l.locked || l.layerKind === "reference") {
+        S.showHint("Select an unlocked sketch layer to place a stencil");
+        return;
+      }
+      const drawOnLayer = (rect, draw) => {
+        if (l.tileStore) {
+          l.tileStore.beginPatch();
+          l.tileStore.forEachContext(rect, (ctx) => draw(ctx));
+          S.saveSnapshot(l);
+        } else {
+          const rx = Math.max(0, Math.floor(rect.x));
+          const ry = Math.max(0, Math.floor(rect.y));
+          const rw = Math.max(0, Math.min(S.doc.wPx - rx, Math.ceil(rect.w)));
+          const rh = Math.max(0, Math.min(S.doc.hPx - ry, Math.ceil(rect.h)));
+          let before = null;
+          try {
+            before = l.ctx.getImageData(rx, ry, rw, rh);
+          } catch (_) {
+          }
+          draw(l.ctx);
+          try {
+            const after = l.ctx.getImageData(rx, ry, rw, rh);
+            if (before) S.pushRegionSnapshot(l, rx, ry, before, after);
+            else S.saveSnapshot(l);
+          } catch (_) {
+            S.saveSnapshot(l);
+          }
+        }
+        S.renderLayers();
+      };
       if (state2.stencilCat === "hatch") {
         const hatch = S.hatchList()[state2.selectedStencil];
         if (!hatch) return;
         const size2 = Math.max(200, state2.size * 40) * (state2.stencilScale || 1);
-        S.placeHatch(hatch, ctx, p.x, p.y, size2, rad);
-        S.saveSnapshot(l);
-        S.renderLayers();
+        const half = size2 * Math.SQRT2 / 2 + 4;
+        drawOnLayer(
+          { x: p.x - half, y: p.y - half, w: half * 2, h: half * 2 },
+          (ctx) => S.placeHatch(hatch, ctx, p.x, p.y, size2, rad)
+        );
+        S.showHint(`${hatch.name} placed \xB7 tap again to repeat`);
         return;
       }
       const baseSize = Math.max(100, state2.size * 40);
       const size = baseSize * (state2.stencilScale || 1);
       const stencil = S.currentStencilList()[state2.selectedStencil];
       if (!stencil) return;
-      const drawWith = (drawFn) => {
-        const half = size * 0.85;
-        const rx = Math.max(0, Math.floor(p.x - half));
-        const ry = Math.max(0, Math.floor(p.y - half));
-        const rw = Math.min(S.doc.wPx - rx, Math.ceil(half * 2));
-        const rh = Math.min(S.doc.hPx - ry, Math.ceil(half * 2));
-        let before = null;
-        try {
-          before = ctx.getImageData(rx, ry, rw, rh);
-        } catch (_) {
-        }
-        ctx.save();
-        ctx.translate(p.x, p.y);
-        if (rad) ctx.rotate(rad);
-        ctx.globalCompositeOperation = "source-over";
-        ctx.strokeStyle = state2.color;
-        ctx.fillStyle = state2.color;
-        ctx.lineWidth = Math.max(1, state2.size);
-        ctx.globalAlpha = state2.alpha;
-        drawFn();
-        ctx.restore();
-        try {
-          const after = ctx.getImageData(rx, ry, rw, rh);
-          if (before) S.pushRegionSnapshot(l, rx, ry, before, after);
-          else S.saveSnapshot(l);
-        } catch (_) {
-          S.saveSnapshot(l);
-        }
+      const commitStencil = (dataUrl, ratio = 1) => {
+        const before = S.vectorSnapshot();
+        const width = size * 1.5;
+        const height = width / Math.max(0.05, ratio || 1);
+        const shape = createPlacedStencilShape({
+          x: p.x,
+          y: p.y,
+          width,
+          height,
+          rotationDeg: state2.stencilRotation || 0,
+          name: stencil.name || "Stencil",
+          dataUrl,
+          opacity: state2.alpha
+        });
+        state2.shapes.push(shape);
+        const id = S.ensureShapeId(shape);
+        S.registerShapeInLayerPanel(shape);
+        S.recordVec(before);
+        S.setTool("select");
+        S.selectShapeById(id, "canvas");
+        S.refreshMeasurements();
         S.renderLayers();
+        S.showHint(`${stencil.name} placed and selected \xB7 use Move, Scale, or Rotate`);
       };
       if (stencil.dataUrl) {
         const img = new Image();
         img.onload = () => {
           const ratio = img.width / img.height;
-          const w = size * 1.5, h = w / ratio;
-          drawWith(() => ctx.drawImage(img, -w / 2, -h / 2, w, h));
+          commitStencil(stencil.dataUrl, ratio);
         };
         img.src = stencil.dataUrl;
       } else if (stencil.draw) {
-        drawWith(() => stencil.draw(ctx, 0, 0, size));
+        const canvas = document.createElement("canvas");
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext("2d");
+        ctx.strokeStyle = state2.color;
+        ctx.fillStyle = state2.color;
+        ctx.lineWidth = Math.max(2, state2.size * 1.5);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        stencil.draw(ctx, 128, 128, 200);
+        commitStencil(canvas.toDataURL("image/png"), 1);
       }
     };
     S.currentStencilList = function currentStencilList() {
@@ -37875,7 +37993,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         div.addEventListener("click", () => {
           state2.selectedStencil = i;
           S.renderStencils();
-          S.showHint(`Tap canvas to place: ${s.name}`);
+          S.showHint(`Tap canvas to place ${s.name} \xB7 tap repeatedly to stamp`);
         });
         if (state2.stencilCat === "custom") {
           const del = document.createElement("button");
@@ -37949,6 +38067,106 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   }
 
   // src/engine/app/color.ts
+  var STROKE_TEXTURE_CHOICES = [
+    { brushId: null, label: "Solid", mode: "solid" },
+    { brushId: "tex-grass", label: "Grass", mode: "grass" },
+    { brushId: "tex-concrete", label: "Concrete", mode: "concrete" },
+    { brushId: "tex-wood", label: "Wood", mode: "wood" },
+    { brushId: "tex-brick", label: "Brick", mode: "brick" },
+    { brushId: "tex-stone", label: "Stone", mode: "stone" }
+  ];
+  var STROKE_TEXTURE_TOOL_IDS = new Set(
+    STROKE_TEXTURE_CHOICES.flatMap((choice) => choice.brushId ? [choice.brushId] : [])
+  );
+  function drawStrokeTexturePreview(canvas, mode, color) {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#f4f2ee";
+    ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    if (mode === "solid") {
+      ctx.fillRect(0, 0, w, h);
+      return;
+    }
+    if (mode === "grass") {
+      ctx.lineWidth = 1.6;
+      for (let x = 4; x < w; x += 7) {
+        const y = h - 5 - x * 3 % 6;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 3, y - 12);
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + 3, y - 15);
+        ctx.stroke();
+      }
+      return;
+    }
+    if (mode === "concrete") {
+      ctx.globalAlpha = 0.72;
+      for (let i = 0; i < 32; i++) {
+        const x = i * 23 % w;
+        const y = i * 17 % h;
+        ctx.beginPath();
+        ctx.arc(x, y, 0.7 + i % 3 * 0.45, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.4;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(3, 10);
+      ctx.lineTo(20, 15);
+      ctx.lineTo(34, 9);
+      ctx.lineTo(51, 14);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      return;
+    }
+    if (mode === "wood") {
+      ctx.lineWidth = 1.4;
+      for (let y = 6; y < h; y += 7) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        for (let x = 0; x <= w; x += 8) ctx.lineTo(x, y + Math.sin((x + y) / 8) * 2);
+        ctx.stroke();
+      }
+      ctx.beginPath();
+      ctx.ellipse(w * 0.7, h * 0.48, 8, 4, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      return;
+    }
+    if (mode === "brick") {
+      ctx.lineWidth = 1.4;
+      for (let y = 0, row = 0; y <= h; y += 10, row++) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+        const offset = row % 2 ? 10 : 0;
+        for (let x = offset; x < w; x += 20) {
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+          ctx.lineTo(x, Math.min(h, y + 10));
+          ctx.stroke();
+        }
+      }
+      return;
+    }
+    if (mode === "stone") {
+      ctx.lineWidth = 1.4;
+      const stones = [[4, 5, 19, 10], [25, 3, 17, 12], [46, 6, 21, 9], [2, 19, 15, 11], [20, 18, 23, 12], [48, 18, 17, 11]];
+      stones.forEach(([x, y, sw, sh]) => {
+        ctx.beginPath();
+        ctx.roundRect(x, y, sw, sh, 4);
+        ctx.stroke();
+      });
+    }
+  }
   function initColor() {
     const state2 = S.state;
     const $el = (id) => document.getElementById(id);
@@ -38209,6 +38427,44 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         cont.appendChild(sw);
       });
     };
+    S.renderStrokeTextures = function renderStrokeTextures() {
+      const cont = $el("stroke-textures");
+      if (!cont) return;
+      cont.innerHTML = "";
+      const activeTexture = STROKE_TEXTURE_TOOL_IDS.has(state2.tool) ? state2.tool : null;
+      STROKE_TEXTURE_CHOICES.forEach((choice) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "stroke-texture-option" + (activeTexture === choice.brushId ? " active" : "");
+        button.dataset.brushId = choice.brushId || "solid";
+        button.setAttribute("aria-pressed", String(activeTexture === choice.brushId));
+        button.title = choice.brushId ? `${choice.label} texture stroke` : "Use the previous solid brush";
+        const preview = document.createElement("canvas");
+        preview.width = 76;
+        preview.height = 34;
+        preview.setAttribute("aria-hidden", "true");
+        drawStrokeTexturePreview(preview, choice.mode, state2.color);
+        const label = document.createElement("span");
+        label.textContent = choice.label;
+        button.append(preview, label);
+        button.addEventListener("click", (event) => {
+          event.stopPropagation();
+          if (choice.brushId) {
+            if (!STROKE_TEXTURE_TOOL_IDS.has(state2.tool)) state2.strokeTexturePreviousTool = state2.tool;
+            S.setTool(choice.brushId);
+            S.showHint(`${choice.label} texture \u2014 draw to paint a repeating material stroke`);
+          } else {
+            const previous = state2.strokeTexturePreviousTool;
+            const solidTool = previous && !STROKE_TEXTURE_TOOL_IDS.has(previous) ? previous : "pen";
+            S.setTool(solidTool);
+            S.showHint("Solid stroke restored");
+          }
+          S.colorPopover.classList.add("show");
+          S.renderStrokeTextures();
+        });
+        cont.appendChild(button);
+      });
+    };
     S.setColor = function setColor(c) {
       state2.color = c;
       $el("puck-color").style.background = c;
@@ -38217,6 +38473,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.syncWheelFromColor(c);
       S.updatePreview();
       S.renderSwatches();
+      S.renderStrokeTextures();
     };
     $el("puck-color").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -38231,6 +38488,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.drawSVSquare();
       S.updateHarmony();
       S.renderSwatches();
+      S.renderStrokeTextures();
       $el("fill-tolerance-row").style.display = state2.tool === "fill" || state2.tool === "wand" || state2.tool === "lasso" ? "block" : "none";
       requestAnimationFrame(() => {
         const popH = S.colorPopover.offsetHeight || 360;
@@ -38262,6 +38520,33 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   }
 
   // src/engine/app/fill.ts
+  function svgTexture(markup) {
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">${markup}</svg>`
+    )}`;
+  }
+  var BUILTIN_FILL_TEXTURES = [
+    {
+      name: "Diagonal hatch",
+      dataUrl: svgTexture('<rect width="48" height="48" fill="#f8f7f3"/><path d="M-12 12L12-12M0 48L48 0M36 60L60 36" stroke="#77736c" stroke-width="2"/>')
+    },
+    {
+      name: "Cross hatch",
+      dataUrl: svgTexture('<rect width="48" height="48" fill="#faf9f6"/><path d="M-12 12L12-12M0 48L48 0M36 60L60 36M36-12L60 12M0 0L48 48M-12 36L12 60" stroke="#85817a" stroke-width="1.5"/>')
+    },
+    {
+      name: "Brick",
+      dataUrl: svgTexture('<rect width="48" height="48" fill="#eeeae3"/><path d="M0 0H48M0 16H48M0 32H48M0 48H48M12 0V16M36 0V16M0 16V32M24 16V32M48 16V32M12 32V48M36 32V48" stroke="#8a8177" stroke-width="1.5"/>')
+    },
+    {
+      name: "Concrete",
+      dataUrl: svgTexture('<rect width="48" height="48" fill="#e8e7e3"/><g fill="#9d9b95"><circle cx="7" cy="9" r="1.4"/><circle cx="25" cy="6" r="1"/><circle cx="40" cy="14" r="1.8"/><circle cx="15" cy="26" r="1.7"/><circle cx="34" cy="31" r="1.2"/><circle cx="6" cy="42" r="1"/><circle cx="44" cy="44" r="1.5"/></g>')
+    },
+    {
+      name: "Timber",
+      dataUrl: svgTexture('<rect width="48" height="48" fill="#d8c1a1"/><path d="M0 8C12 3 26 13 48 6M0 23C16 17 30 29 48 21M0 39C14 33 31 44 48 37" fill="none" stroke="#8f6d48" stroke-width="1.4"/><ellipse cx="31" cy="22" rx="5" ry="2.5" fill="none" stroke="#8f6d48"/>')
+    }
+  ];
   function initFill() {
     const state2 = S.state;
     const $el = (id) => document.getElementById(id);
@@ -38543,10 +38828,45 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         }
       }
       cx.putImageData(id, 0, 0);
-      layer.ctx.save();
-      layer.ctx.globalAlpha = state2.alpha;
-      layer.ctx.drawImage(c, bbox.x, bbox.y);
-      layer.ctx.restore();
+      S.paintFillCanvas(layer, bbox, c, state2.alpha);
+    };
+    S.paintFillCanvas = function paintFillCanvas(layer, bbox, source, opacity = 1) {
+      const draw = (ctx) => {
+        ctx.save();
+        ctx.globalCompositeOperation = "source-over";
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(source, bbox.x, bbox.y);
+        ctx.restore();
+      };
+      if (layer.tileStore) {
+        layer.tileStore.beginPatch();
+        layer.tileStore.forEachContext(bbox, (ctx) => draw(ctx));
+      } else {
+        draw(layer.ctx);
+      }
+    };
+    S.paintMaskColorOnLayer = function paintMaskColorOnLayer(layer, mask, bbox, fillHex) {
+      const c = document.createElement("canvas");
+      c.width = bbox.w;
+      c.height = bbox.h;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      const image = ctx.createImageData(bbox.w, bbox.h);
+      const data = image.data;
+      const [r, g, b] = S.hexToRgba(fillHex);
+      const alpha = Math.round(state2.alpha * 255);
+      const docWidth = S.doc.wPx;
+      for (let y = 0; y < bbox.h; y++) {
+        for (let x = 0; x < bbox.w; x++) {
+          if (!mask[(bbox.y + y) * docWidth + bbox.x + x]) continue;
+          const offset = (y * bbox.w + x) * 4;
+          data[offset] = r;
+          data[offset + 1] = g;
+          data[offset + 2] = b;
+          data[offset + 3] = alpha;
+        }
+      }
+      ctx.putImageData(image, 0, 0);
+      S.paintFillCanvas(layer, bbox, c, 1);
     };
     S.currentFillTexture = function currentFillTexture() {
       if (state2.fillTexIndex == null) return null;
@@ -38554,11 +38874,12 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       return t && t.img && t.img.complete ? t.img : null;
     };
     S.applyFill = function applyFill(layer, mask) {
+      const bbox = S.computeMaskBBox(mask);
+      if (!bbox) return;
       if (state2.fillStyle === "image" && S.currentFillTexture()) {
-        const bbox = S.computeMaskBBox(mask);
-        if (bbox) S.paintMaskWithImage(layer, mask, bbox, S.currentFillTexture(), state2.fillTexMode, state2.fillTexScale);
+        S.paintMaskWithImage(layer, mask, bbox, S.currentFillTexture(), state2.fillTexMode, state2.fillTexScale);
       } else {
-        S.paintMaskColor(layer.ctx, mask, state2.color, Math.round(state2.alpha * 255));
+        S.paintMaskColorOnLayer(layer, mask, bbox, state2.color);
       }
     };
     S.floodFill = function floodFill(ctx, startX, startY, fillHex, tolerance, sampleAll, expand) {
@@ -38610,22 +38931,37 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         d.className = "tex-thumb" + (i === state2.fillTexIndex ? " active" : "");
         d.style.backgroundImage = `url(${t.dataUrl})`;
         d.title = t.name;
-        d.addEventListener("click", () => {
+        d.setAttribute("role", "button");
+        d.setAttribute("aria-label", t.name);
+        d.tabIndex = 0;
+        const selectTexture = () => {
           state2.fillTexIndex = i;
+          state2.fillStyle = "image";
+          S.syncFillStyleUI();
           S.renderTexStrip();
+        };
+        d.addEventListener("click", selectTexture);
+        d.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            selectTexture();
+          }
         });
-        const del = document.createElement("button");
-        del.className = "del";
-        del.textContent = "\xD7";
-        del.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          state2.fillTextures.splice(i, 1);
-          if (state2.fillTexIndex === i) state2.fillTexIndex = null;
-          else if (state2.fillTexIndex > i) state2.fillTexIndex--;
-          S.renderTexStrip();
-          S.persistFillTextures();
-        });
-        d.appendChild(del);
+        if (!t.builtin) {
+          const del = document.createElement("button");
+          del.className = "del";
+          del.textContent = "\xD7";
+          del.setAttribute("aria-label", `Delete ${t.name}`);
+          del.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            state2.fillTextures.splice(i, 1);
+            if (state2.fillTexIndex === i) state2.fillTexIndex = 0;
+            else if (state2.fillTexIndex > i) state2.fillTexIndex--;
+            S.renderTexStrip();
+            S.persistFillTextures();
+          });
+          d.appendChild(del);
+        }
         strip.appendChild(d);
       });
     };
@@ -38650,11 +38986,21 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
     $el("fill-tex-import").addEventListener("click", () => S.fileInputFillTex.click());
     S.persistFillTextures = function persistFillTextures() {
       try {
-        localStorage.setItem("nm-fill-textures", JSON.stringify(state2.fillTextures.map((t) => ({ name: t.name, dataUrl: t.dataUrl }))));
+        const custom = state2.fillTextures.filter((t) => !t.builtin).map((t) => ({ name: t.name, dataUrl: t.dataUrl }));
+        localStorage.setItem("nm-fill-textures", JSON.stringify(custom));
       } catch (e) {
       }
     };
     S.loadFillTextures = function loadFillTextures() {
+      BUILTIN_FILL_TEXTURES.forEach((rec) => {
+        const img = new Image();
+        const texture = { ...rec, builtin: true, img };
+        state2.fillTextures.push(texture);
+        img.onload = () => S.renderTexStrip();
+        img.src = rec.dataUrl;
+      });
+      if (state2.fillTexIndex == null && state2.fillTextures.length) state2.fillTexIndex = 0;
+      S.renderTexStrip();
       try {
         const raw = localStorage.getItem("nm-fill-textures");
         if (!raw) return;
@@ -39645,7 +39991,11 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       }
       return out;
     };
-    $el("puck-name").addEventListener("pointerdown", (e) => {
+    const puckNameButton = $el("puck-name");
+    puckNameButton.addEventListener("pointerdown", (e) => {
+      e.stopPropagation();
+    });
+    const toggleBrushPresetMenu = (e) => {
       e.preventDefault();
       e.stopPropagation();
       const group = S._groupOf ? S._groupOf(state2.tool) : null;
@@ -39656,7 +40006,11 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         return;
       }
       if (S._grpFlyout) S.closeGroupFlyout();
-      S.openBrushPresetMenu($el("puck-name"));
+      S.openBrushPresetMenu(puckNameButton);
+    };
+    puckNameButton.addEventListener("click", toggleBrushPresetMenu);
+    puckNameButton.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " " || e.key === "ArrowUp") toggleBrushPresetMenu(e);
     });
     S.editorBrush = null;
     S.editorEditIndex = null;
@@ -39919,13 +40273,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
       S.closeBrushPresetMenu();
       const family = S.brushFamilyOf(state2.tool);
       const quickIds = S.BRUSH_FAMILIES[family] || [];
-      const candidateIds = [.../* @__PURE__ */ new Set([
-        ...quickIds,
-        ...S.BUILTIN_BRUSHES.filter((brush) => brush.family === family || S.brushFamilyOf(brush.id) === family).map((brush) => brush.id)
-      ])];
       const seenNames = /* @__PURE__ */ new Set();
-      const ids = candidateIds.filter((id) => {
+      const ids = quickIds.slice(0, 5).filter((id) => {
         const brush = S.BUILTIN_BRUSHES.find((item) => item.id === id);
+        if (!brush) return false;
         const key = String((brush == null ? void 0 : brush.name) || id).trim().toLowerCase();
         if (seenNames.has(key)) return false;
         seenNames.add(key);
@@ -42743,7 +43094,23 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         const w = sh.width || 2;
         const shapeOpacity = typeof sh.opacity === "number" ? sh.opacity : engObj && typeof engObj.opacity === "number" ? engObj.opacity : 1;
         const clipId = "shclip_" + si;
-        if (sh.bgImage) {
+        if (sh.kind === "stencil" && sh.bgImage && sh.pts && sh.pts.length >= 4) {
+          const p0 = sh.pts[0], p1 = sh.pts[1], p3 = sh.pts[3];
+          const img = document.createElementNS(svgns, "image");
+          img.setAttribute("href", sh.bgImage);
+          img.setAttributeNS("http://www.w3.org/1999/xlink", "href", sh.bgImage);
+          img.setAttribute("x", "0");
+          img.setAttribute("y", "0");
+          img.setAttribute("width", "1");
+          img.setAttribute("height", "1");
+          img.setAttribute("preserveAspectRatio", "none");
+          img.setAttribute(
+            "transform",
+            `matrix(${p1.x - p0.x} ${p1.y - p0.y} ${p3.x - p0.x} ${p3.y - p0.y} ${p0.x} ${p0.y})`
+          );
+          img.setAttribute("opacity", String(shapeOpacity));
+          S.rulerOverlay.appendChild(img);
+        } else if (sh.bgImage) {
           const defs = document.createElementNS(svgns, "defs");
           const clip = document.createElementNS(svgns, "clipPath");
           clip.setAttribute("id", clipId);
@@ -43292,7 +43659,8 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         if (S.shapeHit(state2.shapes[i], p)) {
           const sh = state2.shapes[i];
           const id = S.ensureShapeId(sh);
-          if (S.__ix && S.__ix.capabilityRegistry && !S.__ix.capabilityRegistry.get("shape").selectable) {
+          const sceneType = sh.kind === "stencil" ? "stencil" : "shape";
+          if (S.__ix && S.__ix.capabilityRegistry && !S.__ix.capabilityRegistry.get(sceneType).selectable) {
             break;
           }
           state2.sel = { type: "shape", idx: i, id };
@@ -43301,7 +43669,7 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
           S.showSelectBar("shape");
           S.syncSelectionManagerFromLegacy("canvas");
           S.refreshMeasurements();
-          S.showHint("Shape selected \u2014 edit width or delete");
+          S.showHint(sh.kind === "stencil" ? "Stencil selected \u2014 use Move, Scale, Rotate, or Delete" : "Shape selected \u2014 edit width or delete");
           return true;
         }
       }
@@ -44101,20 +44469,92 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
   var ORTHO_STEP_RAD = Math.PI / 4;
   var CARDINAL_STEPS = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
   var CARDINAL_CONE_RAD = 2.5 * Math.PI / 180;
-  function mergeDetectedWallCycles(detected, previousRooms, isValidPrevious) {
-    const merged = detected.map((cycle) => cycle.slice());
-    const signatures = new Set(
-      merged.map((cycle) => [...cycle].sort().join(","))
-    );
-    for (const room of previousRooms) {
-      const wallIds = (room.wallIds || []).filter(Boolean);
-      if (wallIds.length < 3) continue;
-      const signature = [...wallIds].sort().join(",");
-      if (signatures.has(signature) || !isValidPrevious(wallIds)) continue;
-      signatures.add(signature);
-      merged.push(wallIds.slice());
+  function wallCyclesStronglyOverlap(a, b) {
+    const aSet = new Set(a.filter(Boolean));
+    const bSet = new Set(b.filter(Boolean));
+    if (aSet.size < 3 || bSet.size < 3) return false;
+    let common = 0;
+    for (const id of aSet) if (bSet.has(id)) common++;
+    return common >= 2 && common / Math.min(aSet.size, bSet.size) >= 2 / 3 && common / Math.max(aSet.size, bSet.size) >= 0.5;
+  }
+  function dedupeOverlappingWallCycles(cycles) {
+    const unique = [];
+    for (const cycle of cycles) {
+      const normalized = [...new Set(cycle.filter(Boolean))];
+      if (normalized.length < 3) continue;
+      if (unique.some((existing) => wallCyclesStronglyOverlap(existing, normalized))) continue;
+      unique.push(normalized);
     }
-    return merged;
+    return unique;
+  }
+  function recoverSavedWallRooms(savedRooms, walls) {
+    if (Array.isArray(savedRooms) && savedRooms.length) {
+      return savedRooms.filter((room) => Boolean(room && typeof room === "object" && typeof room.id === "string")).map((room, index) => ({
+        id: room.id,
+        name: room.name || `Room ${index + 1}`,
+        wallIds: Array.isArray(room.wallIds) ? [...new Set(room.wallIds.filter(Boolean))] : [],
+        areaPx2: typeof room.areaPx2 === "number" ? room.areaPx2 : 0
+      }));
+    }
+    const byRoomId = /* @__PURE__ */ new Map();
+    for (const wall of walls || []) {
+      if (!(wall == null ? void 0 : wall.id) || !wall.roomId) continue;
+      const ids = byRoomId.get(wall.roomId) || [];
+      if (!ids.includes(wall.id)) ids.push(wall.id);
+      byRoomId.set(wall.roomId, ids);
+    }
+    return [...byRoomId.entries()].filter(([, wallIds]) => wallIds.length >= 3).map(([id, wallIds], index) => ({ id, name: `Room ${index + 1}`, wallIds, areaPx2: 0 }));
+  }
+  function mergeDetectedWallCycles(detected, previousRooms, isValidPrevious) {
+    if (detected.length) {
+      const repaired = dedupeOverlappingWallCycles(detected).map((loop) => {
+        let mostComplete = loop;
+        for (const room of previousRooms) {
+          const previous = [...new Set((room.wallIds || []).filter(Boolean))];
+          if (previous.length <= mostComplete.length) continue;
+          if (!loop.every((id) => previous.includes(id))) continue;
+          if (!isValidPrevious(previous)) continue;
+          mostComplete = previous;
+        }
+        return mostComplete === loop ? loop : mostComplete.slice();
+      });
+      return dedupeOverlappingWallCycles(repaired);
+    }
+    const candidates = [];
+    for (const room of previousRooms) {
+      const wallIds = [...new Set((room.wallIds || []).filter(Boolean))];
+      if (wallIds.length < 3) continue;
+      if (!isValidPrevious(wallIds)) continue;
+      candidates.push(wallIds);
+    }
+    candidates.sort((a, b) => b.length - a.length);
+    return dedupeOverlappingWallCycles(candidates);
+  }
+  function matchingPreviousRoomIndex(loop, previousRooms, usedIndexes = /* @__PURE__ */ new Set()) {
+    const loopSet = new Set(loop.filter(Boolean));
+    const signature = [...loopSet].sort().join(",");
+    for (let index = 0; index < previousRooms.length; index++) {
+      if (usedIndexes.has(index)) continue;
+      const previous = [...new Set((previousRooms[index].wallIds || []).filter(Boolean))];
+      if (previous.slice().sort().join(",") === signature) return index;
+    }
+    let bestIndex = -1;
+    let bestScore = -Infinity;
+    for (let index = 0; index < previousRooms.length; index++) {
+      if (usedIndexes.has(index)) continue;
+      const previous = [...new Set((previousRooms[index].wallIds || []).filter(Boolean))];
+      if (previous.length < 3 || loopSet.size < 3) continue;
+      const common = previous.reduce((count, id) => count + (loopSet.has(id) ? 1 : 0), 0);
+      const smallerCoverage = common / Math.min(previous.length, loopSet.size);
+      const largerCoverage = common / Math.max(previous.length, loopSet.size);
+      if (common < 2 || smallerCoverage < 2 / 3 || largerCoverage < 0.5) continue;
+      const score = common * 100 + smallerCoverage * 10 + largerCoverage;
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+    return bestIndex;
   }
   function initWallGraph() {
     const state2 = S.state;
@@ -44529,12 +44969,14 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         }
       );
       const usedWalls = /* @__PURE__ */ new Set();
+      const usedPreviousRooms = /* @__PURE__ */ new Set();
       const nextRooms = [];
       cycles.forEach((loop, idx) => {
         const poly = S.cyclePolygon(loop);
         const areaPx2 = poly ? S.shoelaceArea(poly) : 0;
-        const sig = [...loop].sort().join(",");
-        const existing = prev.find((r) => [...r.wallIds || []].sort().join(",") === sig);
+        const existingIndex = matchingPreviousRoomIndex(loop, prev, usedPreviousRooms);
+        const existing = existingIndex >= 0 ? prev[existingIndex] : null;
+        if (existingIndex >= 0) usedPreviousRooms.add(existingIndex);
         const room = existing ? existing : {
           id: "room_" + Date.now().toString(36) + "_" + idx,
           name: void 0,
@@ -49436,7 +49878,10 @@ fn fs_main(in : VertexOutput) -> @location(0) vec4<f32> {
         S.drawDocGrid();
       }
       if (Array.isArray(saved.measurements)) state2.measurements = saved.measurements;
-      state2.wallRooms = Array.isArray(saved.wallRooms) ? saved.wallRooms : [];
+      state2.wallRooms = recoverSavedWallRooms(
+        saved.wallRooms,
+        Array.isArray(saved.walls) ? saved.walls : []
+      );
       if (Array.isArray(saved.walls)) {
         state2.walls = saved.walls;
         state2.walls.forEach(S.ensureWallId);

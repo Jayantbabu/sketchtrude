@@ -10,24 +10,134 @@ const ORTHO_STEP_RAD = Math.PI / 4;
 const CARDINAL_STEPS = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
 const CARDINAL_CONE_RAD = (2.5 * Math.PI) / 180;
 
+function wallCyclesStronglyOverlap(a: string[], b: string[]): boolean {
+  const aSet = new Set(a.filter(Boolean));
+  const bSet = new Set(b.filter(Boolean));
+  if (aSet.size < 3 || bSet.size < 3) return false;
+  let common = 0;
+  for (const id of aSet) if (bSet.has(id)) common++;
+  return common >= 2 &&
+    common / Math.min(aSet.size, bSet.size) >= 2 / 3 &&
+    common / Math.max(aSet.size, bSet.size) >= 0.5;
+}
+
+export function dedupeOverlappingWallCycles(cycles: string[][]): string[][] {
+  const unique: string[][] = [];
+  for (const cycle of cycles) {
+    const normalized = [...new Set(cycle.filter(Boolean))];
+    if (normalized.length < 3) continue;
+    if (unique.some((existing) => wallCyclesStronglyOverlap(existing, normalized))) continue;
+    unique.push(normalized);
+  }
+  return unique;
+}
+
+export function recoverSavedWallRooms(
+  savedRooms: unknown,
+  walls: Array<{ id?: string | null; roomId?: string | null }>,
+): Array<{ id: string; name: string; wallIds: string[]; areaPx2: number }> {
+  if (Array.isArray(savedRooms) && savedRooms.length) {
+    return savedRooms
+      .filter((room): room is { id: string; name?: string; wallIds?: string[]; areaPx2?: number } =>
+        Boolean(room && typeof room === "object" && typeof (room as any).id === "string"))
+      .map((room, index) => ({
+        id: room.id,
+        name: room.name || `Room ${index + 1}`,
+        wallIds: Array.isArray(room.wallIds) ? [...new Set(room.wallIds.filter(Boolean))] : [],
+        areaPx2: typeof room.areaPx2 === "number" ? room.areaPx2 : 0,
+      }));
+  }
+
+  const byRoomId = new Map<string, string[]>();
+  for (const wall of walls || []) {
+    if (!wall?.id || !wall.roomId) continue;
+    const ids = byRoomId.get(wall.roomId) || [];
+    if (!ids.includes(wall.id)) ids.push(wall.id);
+    byRoomId.set(wall.roomId, ids);
+  }
+
+  return [...byRoomId.entries()]
+    .filter(([, wallIds]) => wallIds.length >= 3)
+    .map(([id, wallIds], index) => ({ id, name: `Room ${index + 1}`, wallIds, areaPx2: 0 }));
+}
+
 export function mergeDetectedWallCycles(
   detected: string[][],
   previousRooms: Array<{ wallIds?: string[] | null }>,
   isValidPrevious: (wallIds: string[]) => boolean,
 ): string[][] {
-  const merged = detected.map((cycle) => cycle.slice());
-  const signatures = new Set(
-    merged.map((cycle) => [...cycle].sort().join(",")),
-  );
-  for (const room of previousRooms) {
-    const wallIds = (room.wallIds || []).filter(Boolean);
-    if (wallIds.length < 3) continue;
-    const signature = [...wallIds].sort().join(",");
-    if (signatures.has(signature) || !isValidPrevious(wallIds)) continue;
-    signatures.add(signature);
-    merged.push(wallIds.slice());
+  // A saved cycle is only a recovery path for the short window where the
+  // detector has no result (for example while a project is still restoring).
+  // Merging old and newly detected cycles creates a second, stale room when a
+  // wall id changes during normalization.
+  if (detected.length) {
+    const repaired = dedupeOverlappingWallCycles(detected).map((loop) => {
+      let mostComplete = loop;
+
+      for (const room of previousRooms) {
+        const previous = [...new Set((room.wallIds || []).filter(Boolean))];
+        if (previous.length <= mostComplete.length) continue;
+        // A reload can momentarily detect a three-wall sub-loop while the
+        // saved room still has the valid fourth boundary. Prefer that complete
+        // superset, but never revive a missing/renamed wall id or an unrelated
+        // adjacent room.
+        if (!loop.every((id) => previous.includes(id))) continue;
+        if (!isValidPrevious(previous)) continue;
+        mostComplete = previous;
+      }
+
+      return mostComplete === loop ? loop : mostComplete.slice();
+    });
+    return dedupeOverlappingWallCycles(repaired);
   }
-  return merged;
+
+  const candidates: string[][] = [];
+  for (const room of previousRooms) {
+    const wallIds = [...new Set((room.wallIds || []).filter(Boolean))];
+    if (wallIds.length < 3) continue;
+    if (!isValidPrevious(wallIds)) continue;
+    candidates.push(wallIds);
+  }
+  // When only saved fallbacks are available, consider fuller valid boundaries
+  // first so a stale three-wall variant cannot hide its four-wall room.
+  candidates.sort((a, b) => b.length - a.length);
+  return dedupeOverlappingWallCycles(candidates);
+}
+
+export function matchingPreviousRoomIndex(
+  loop: string[],
+  previousRooms: Array<{ wallIds?: string[] | null }>,
+  usedIndexes: ReadonlySet<number> = new Set(),
+): number {
+  const loopSet = new Set(loop.filter(Boolean));
+  const signature = [...loopSet].sort().join(",");
+
+  for (let index = 0; index < previousRooms.length; index++) {
+    if (usedIndexes.has(index)) continue;
+    const previous = [...new Set((previousRooms[index].wallIds || []).filter(Boolean))];
+    if (previous.slice().sort().join(",") === signature) return index;
+  }
+
+  let bestIndex = -1;
+  let bestScore = -Infinity;
+  for (let index = 0; index < previousRooms.length; index++) {
+    if (usedIndexes.has(index)) continue;
+    const previous = [...new Set((previousRooms[index].wallIds || []).filter(Boolean))];
+    if (previous.length < 3 || loopSet.size < 3) continue;
+    const common = previous.reduce((count, id) => count + (loopSet.has(id) ? 1 : 0), 0);
+    const smallerCoverage = common / Math.min(previous.length, loopSet.size);
+    const largerCoverage = common / Math.max(previous.length, loopSet.size);
+    // Adjacent rooms normally share one wall. Requiring at least two shared
+    // walls plus strong coverage safely recognizes the same room after one
+    // segment has been split or assigned a new id.
+    if (common < 2 || smallerCoverage < 2 / 3 || largerCoverage < 0.5) continue;
+    const score = common * 100 + smallerCoverage * 10 + largerCoverage;
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
 }
 
 export function initWallGraph() {
@@ -549,14 +659,15 @@ export function initWallGraph() {
       },
     );
     const usedWalls = new Set<string>();
+    const usedPreviousRooms = new Set<number>();
     const nextRooms: any[] = [];
 
     cycles.forEach((loop: string[], idx: number) => {
       const poly = S.cyclePolygon(loop);
       const areaPx2 = poly ? S.shoelaceArea(poly) : 0;
-      // Reuse existing room id if same wall set
-      const sig = [...loop].sort().join(",");
-      const existing = prev.find((r: any) => [...(r.wallIds || [])].sort().join(",") === sig);
+      const existingIndex = matchingPreviousRoomIndex(loop, prev, usedPreviousRooms);
+      const existing = existingIndex >= 0 ? prev[existingIndex] : null;
+      if (existingIndex >= 0) usedPreviousRooms.add(existingIndex);
       const room: any = existing
         ? existing
         : {

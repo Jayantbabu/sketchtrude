@@ -1,6 +1,35 @@
 /* Flood fill — shared scope S */
 import { S } from "./scope";
 
+function svgTexture(markup: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">${markup}</svg>`,
+  )}`;
+}
+
+export const BUILTIN_FILL_TEXTURES = [
+  {
+    name: "Diagonal hatch",
+    dataUrl: svgTexture('<rect width="48" height="48" fill="#f8f7f3"/><path d="M-12 12L12-12M0 48L48 0M36 60L60 36" stroke="#77736c" stroke-width="2"/>'),
+  },
+  {
+    name: "Cross hatch",
+    dataUrl: svgTexture('<rect width="48" height="48" fill="#faf9f6"/><path d="M-12 12L12-12M0 48L48 0M36 60L60 36M36-12L60 12M0 0L48 48M-12 36L12 60" stroke="#85817a" stroke-width="1.5"/>'),
+  },
+  {
+    name: "Brick",
+    dataUrl: svgTexture('<rect width="48" height="48" fill="#eeeae3"/><path d="M0 0H48M0 16H48M0 32H48M0 48H48M12 0V16M36 0V16M0 16V32M24 16V32M48 16V32M12 32V48M36 32V48" stroke="#8a8177" stroke-width="1.5"/>'),
+  },
+  {
+    name: "Concrete",
+    dataUrl: svgTexture('<rect width="48" height="48" fill="#e8e7e3"/><g fill="#9d9b95"><circle cx="7" cy="9" r="1.4"/><circle cx="25" cy="6" r="1"/><circle cx="40" cy="14" r="1.8"/><circle cx="15" cy="26" r="1.7"/><circle cx="34" cy="31" r="1.2"/><circle cx="6" cy="42" r="1"/><circle cx="44" cy="44" r="1.5"/></g>'),
+  },
+  {
+    name: "Timber",
+    dataUrl: svgTexture('<rect width="48" height="48" fill="#d8c1a1"/><path d="M0 8C12 3 26 13 48 6M0 23C16 17 30 29 48 21M0 39C14 33 31 44 48 37" fill="none" stroke="#8f6d48" stroke-width="1.4"/><ellipse cx="31" cy="22" rx="5" ry="2.5" fill="none" stroke="#8f6d48"/>'),
+  },
+] as const;
+
 export function initFill() {
   const state = S.state;
 
@@ -284,10 +313,43 @@ export function initFill() {
       }
     }
     cx.putImageData(id, 0, 0);
-    layer.ctx.save();
-    layer.ctx.globalAlpha = state.alpha;
-    layer.ctx.drawImage(c, bbox.x, bbox.y);
-    layer.ctx.restore();
+    S.paintFillCanvas(layer, bbox, c, state.alpha);
+  }
+
+  S.paintFillCanvas = function paintFillCanvas(layer: any, bbox: any, source: HTMLCanvasElement, opacity = 1) {
+    const draw = (ctx: CanvasRenderingContext2D) => {
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = opacity;
+      ctx.drawImage(source, bbox.x, bbox.y);
+      ctx.restore();
+    };
+    if (layer.tileStore) {
+      layer.tileStore.beginPatch();
+      layer.tileStore.forEachContext(bbox, (ctx: CanvasRenderingContext2D) => draw(ctx));
+    } else {
+      draw(layer.ctx);
+    }
+  }
+
+  S.paintMaskColorOnLayer = function paintMaskColorOnLayer(layer: any, mask: any, bbox: any, fillHex: string) {
+    const c = document.createElement('canvas');
+    c.width = bbox.w; c.height = bbox.h;
+    const ctx = c.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
+    const image = ctx.createImageData(bbox.w, bbox.h);
+    const data = image.data;
+    const [r, g, b] = S.hexToRgba(fillHex);
+    const alpha = Math.round(state.alpha * 255);
+    const docWidth = S.doc.wPx;
+    for (let y = 0; y < bbox.h; y++) {
+      for (let x = 0; x < bbox.w; x++) {
+        if (!mask[(bbox.y + y) * docWidth + bbox.x + x]) continue;
+        const offset = (y * bbox.w + x) * 4;
+        data[offset] = r; data[offset + 1] = g; data[offset + 2] = b; data[offset + 3] = alpha;
+      }
+    }
+    ctx.putImageData(image, 0, 0);
+    S.paintFillCanvas(layer, bbox, c, 1);
   }
 
   S.currentFillTexture = function currentFillTexture() {
@@ -298,11 +360,12 @@ export function initFill() {
 
   // Apply the current fill source (colour or image) to a mask on a layer.
   S.applyFill = function applyFill(layer: any, mask: any) {
+    const bbox = S.computeMaskBBox(mask);
+    if (!bbox) return;
     if (state.fillStyle === 'image' && S.currentFillTexture()) {
-      const bbox = S.computeMaskBBox(mask);
-      if (bbox) S.paintMaskWithImage(layer, mask, bbox, S.currentFillTexture(), state.fillTexMode, state.fillTexScale);
+      S.paintMaskWithImage(layer, mask, bbox, S.currentFillTexture(), state.fillTexMode, state.fillTexScale);
     } else {
-      S.paintMaskColor(layer.ctx, mask, state.color, Math.round(state.alpha * 255));
+      S.paintMaskColorOnLayer(layer, mask, bbox, state.color);
     }
   }
 
@@ -358,17 +421,32 @@ export function initFill() {
       d.className = 'tex-thumb' + (i === (state.fillTexIndex as any) ? ' active' : '');
       d.style.backgroundImage = `url(${t.dataUrl})`;
       d.title = t.name;
-      d.addEventListener('click', () => { (state.fillTexIndex as any) = i; S.renderTexStrip(); });
-      const del = document.createElement('button');
-      del.className = 'del'; del.textContent = '×';
-      del.addEventListener('click', (ev: any) => {
-        ev.stopPropagation();
-        state.fillTextures.splice(i, 1);
-        if ((state.fillTexIndex as any) === i) (state.fillTexIndex as any) = null;
-        else if ((state.fillTexIndex as any) > i) (state.fillTexIndex as any)--;
-        S.renderTexStrip(); S.persistFillTextures();
+      d.setAttribute('role', 'button');
+      d.setAttribute('aria-label', t.name);
+      d.tabIndex = 0;
+      const selectTexture = () => {
+        (state.fillTexIndex as any) = i;
+        state.fillStyle = 'image';
+        S.syncFillStyleUI();
+        S.renderTexStrip();
+      };
+      d.addEventListener('click', selectTexture);
+      d.addEventListener('keydown', (event: KeyboardEvent) => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectTexture(); }
       });
-      d.appendChild(del);
+      if (!t.builtin) {
+        const del = document.createElement('button');
+        del.className = 'del'; del.textContent = '×';
+        del.setAttribute('aria-label', `Delete ${t.name}`);
+        del.addEventListener('click', (ev: any) => {
+          ev.stopPropagation();
+          state.fillTextures.splice(i, 1);
+          if ((state.fillTexIndex as any) === i) (state.fillTexIndex as any) = 0;
+          else if ((state.fillTexIndex as any) > i) (state.fillTexIndex as any)--;
+          S.renderTexStrip(); S.persistFillTextures();
+        });
+        d.appendChild(del);
+      }
       strip.appendChild(d);
     });
   }
@@ -392,9 +470,23 @@ export function initFill() {
   $el('fill-tex-import').addEventListener('click', () => S.fileInputFillTex.click());
 
   S.persistFillTextures = function persistFillTextures() {
-    try { localStorage.setItem('nm-fill-textures', JSON.stringify(state.fillTextures.map((t: any) => ({ name: t.name, dataUrl: t.dataUrl })))); } catch (e) {}
+    try {
+      const custom = state.fillTextures
+        .filter((t: any) => !t.builtin)
+        .map((t: any) => ({ name: t.name, dataUrl: t.dataUrl }));
+      localStorage.setItem('nm-fill-textures', JSON.stringify(custom));
+    } catch (e) {}
   }
   S.loadFillTextures = function loadFillTextures() {
+    BUILTIN_FILL_TEXTURES.forEach((rec) => {
+      const img = new Image();
+      const texture: any = { ...rec, builtin: true, img };
+      state.fillTextures.push(texture);
+      img.onload = () => S.renderTexStrip();
+      img.src = rec.dataUrl;
+    });
+    if ((state.fillTexIndex as any) == null && state.fillTextures.length) (state.fillTexIndex as any) = 0;
+    S.renderTexStrip();
     try {
       const raw = localStorage.getItem('nm-fill-textures'); if (!raw) return;
       JSON.parse(raw).forEach((rec: any) => { const img = new Image(); img.onload = () => { state.fillTextures.push({ name: rec.name, dataUrl: rec.dataUrl, img }); S.renderTexStrip(); }; img.src = rec.dataUrl; });

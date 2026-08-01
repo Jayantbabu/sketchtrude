@@ -7,6 +7,7 @@ import {
 } from "../src/engine/layers";
 import { createEmptyProjectDocument } from "../src/features/projects/domain/project-document";
 import { createSelectionManager } from "../src/engine/interaction/selection-manager";
+import { enforceWallRoomContainment } from "../src/engine/app/state-init";
 import {
   getLayerCapabilities,
   getTransformCapabilities,
@@ -67,6 +68,45 @@ describe("LayerEngine", () => {
     );
     expect(engine.getActiveLayerId()).toBe(boot.sketchLayerId);
     expect(engine.getRasterLayerIds()).toEqual([boot.sketchLayerId]);
+  });
+
+  it("removes a room wall from the layer root and rebuilds all room children", () => {
+    const engine = createLayerEngine();
+    const { mainLayerId } = engine.bootstrap({ floorName: "Canvas" });
+    const roomObjectId = engine.createObject({
+      layerId: mainLayerId,
+      type: "room",
+      name: "Room 1",
+      legacyRef: { kind: "wall-room", id: "room-1" },
+    });
+    const wallIds = ["wall-1", "wall-2", "wall-3", "wall-4"];
+    const wallObjectIds = wallIds.map((wallId, index) =>
+      engine.createObject({
+        layerId: mainLayerId,
+        type: "wall",
+        name: `Wall ${index + 1}`,
+        legacyRef: { kind: "wall", id: wallId },
+      }),
+    );
+
+    // Reproduce the observed state: Wall 2 claims the room as parent but is
+    // still present at the Layer 1 root.
+    const rawEngine = engine as any;
+    rawEngine.objects[wallObjectIds[1]].relations.hierarchyParentId = roomObjectId;
+    expect(rawEngine.layers[mainLayerId].objectIds).toContain(wallObjectIds[1]);
+
+    enforceWallRoomContainment(engine, [{ id: "room-1", wallIds }]);
+    engine.normalizeObjectContainment();
+
+    expect(rawEngine.objects[roomObjectId].childIds).toEqual(wallObjectIds);
+    expect(rawEngine.layers[mainLayerId].objectIds).not.toEqual(
+      expect.arrayContaining(wallObjectIds),
+    );
+    const wallRows = engine
+      .getPanelRows({ includeObjects: true, hideFloors: true })
+      .filter((row) => row.nodeKind === "object" && row.objectType === "wall");
+    expect(wallRows).toHaveLength(4);
+    expect(wallRows.every((row) => row.depth === 2)).toBe(true);
   });
 
   it("rebuilds raster layers from a legacy flat list", () => {

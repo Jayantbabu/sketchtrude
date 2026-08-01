@@ -8,6 +8,7 @@ import {
 /** Map legacy shape.kind → SceneObjectType. */
 export function sceneTypeFromShapeKind(kind: string): SceneObjectType {
   if (kind === "line") return "line";
+  if (kind === "stencil") return "stencil";
   return "shape";
 }
 
